@@ -1,0 +1,157 @@
+package com.folderbackup.agent.network
+
+import com.folderbackup.agent.data.AppConfig
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.logging.HttpLoggingInterceptor
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.util.concurrent.TimeUnit
+
+class BackupApiClient {
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .addInterceptor(
+            HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BASIC
+            },
+        )
+        .build()
+
+    fun fetchPendingJobs(config: AppConfig): Result<List<RemoteJob>> = runCatching {
+        val url = "${config.apiBaseUrl}/api/v1/devices/${config.deviceId}/commands"
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Authorization", bearer(config.apiToken))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code}: ${response.message}")
+            }
+            parseJobsResponse(response.body?.string().orEmpty())
+        }
+    }
+
+    fun reportJobProgress(config: AppConfig, report: JobProgressReport): Result<Unit> = runCatching {
+        val payload = JSONObject()
+            .put("job_id", report.jobId)
+            .put("status", report.status)
+            .put("message", report.message)
+            .put("files_processed", report.filesProcessed)
+            .put("bytes_processed", report.bytesProcessed)
+        postJson(config, "/api/v1/jobs/${report.jobId}/progress", payload)
+    }
+
+    fun uploadFile(
+        config: AppConfig,
+        meta: FileUploadRequest,
+        file: File,
+    ): Result<Unit> = runCatching {
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("job_id", meta.jobId)
+            .addFormDataPart("folder_id", meta.folderId)
+            .addFormDataPart("relative_path", meta.relativePath)
+            .addFormDataPart("sha256", meta.sha256)
+            .addFormDataPart("size_bytes", meta.sizeBytes.toString())
+            .addFormDataPart("last_modified", meta.lastModified.toString())
+            .addFormDataPart(
+                "file",
+                file.name,
+                file.asRequestBody("application/octet-stream".toMediaType()),
+            )
+            .build()
+
+        val request = Request.Builder()
+            .url("${config.apiBaseUrl}/api/v1/upload")
+            .post(body)
+            .header("Authorization", bearer(config.apiToken))
+            .build()
+
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                error("Upload falhou HTTP ${response.code}")
+            }
+        }
+    }
+
+    fun downloadFile(config: AppConfig, jobId: String, relativePath: String, target: File): Result<Unit> =
+        runCatching {
+            val encodedPath = relativePath.split("/").joinToString("/") { segment ->
+                java.net.URLEncoder.encode(segment, Charsets.UTF_8.name()).replace("+", "%20")
+            }
+            val url =
+                "${config.apiBaseUrl}/api/v1/jobs/$jobId/files?path=$encodedPath"
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .header("Authorization", bearer(config.apiToken))
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    error("Download falhou HTTP ${response.code}")
+                }
+                val body = response.body ?: error("Corpo vazio")
+                target.parentFile?.mkdirs()
+                target.outputStream().use { out -> body.byteStream().copyTo(out) }
+            }
+        }
+
+    fun fetchRestoreManifest(config: AppConfig, job: RemoteJob): Result<List<String>> = runCatching {
+        val backupId = job.backupId ?: error("backup_id obrigatório")
+        val url = "${config.apiBaseUrl}/api/v1/backups/$backupId/manifest"
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Authorization", bearer(config.apiToken))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("HTTP ${response.code}")
+            val root = JSONObject(response.body?.string().orEmpty())
+            val files = root.optJSONArray("files") ?: JSONArray()
+            buildList {
+                for (i in 0 until files.length()) {
+                    val path = files.optString(i)
+                    if (path.isNotBlank()) add(path)
+                }
+            }
+        }
+    }
+
+    fun ping(config: AppConfig): Result<String> = runCatching {
+        val url = "${config.apiBaseUrl}/api/v1/health"
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Authorization", bearer(config.apiToken))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("HTTP ${response.code}")
+            response.body?.string() ?: "ok"
+        }
+    }
+
+    private fun postJson(config: AppConfig, path: String, json: JSONObject) {
+        val request = Request.Builder()
+            .url("${config.apiBaseUrl}$path")
+            .post(json.toString().toRequestBody(jsonMediaType))
+            .header("Authorization", bearer(config.apiToken))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("HTTP ${response.code}")
+        }
+    }
+
+    private fun bearer(token: String): String =
+        if (token.startsWith("Bearer ", ignoreCase = true)) token else "Bearer $token"
+}

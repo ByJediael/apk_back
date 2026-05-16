@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Folder Backup Agent</string>
+    <string name="notification_channel_name">Backup e sincronização</string>
+    <string name="notification_channel_desc">Jobs de backup e restore em execução</string>
+    <string name="notification_title">Folder Backup Agent</string>
+    <string name="notification_idle">Aguardando comandos da API</string>
+    <string name="notification_backup">Backup em andamento…</string>
+    <string name="notification_restore">Restauração em andamento…</string>
+</resources>
