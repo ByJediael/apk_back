@@ -8,6 +8,10 @@
 .externalNativeBuild
 .cxx
 app/build
+app/google-services.json
 *.apk
 *.ap_
 *.aab
+server/backup-api/node_modules/
+server/backup-api/data/
+server/backup-api/.env

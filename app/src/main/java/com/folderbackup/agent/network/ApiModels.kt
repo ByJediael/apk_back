@@ -18,6 +18,7 @@ data class RemoteJob(
     val type: JobType,
     val folderId: String?,
     val folderUri: String?,
+    val absolutePath: String?,
     val backupId: String?,
     val incremental: Boolean,
 ) {
@@ -30,6 +31,7 @@ data class RemoteJob(
                 type = type,
                 folderId = obj.optString("folder_id").ifBlank { null },
                 folderUri = obj.optString("folder_uri").ifBlank { null },
+                absolutePath = obj.optString("absolute_path").ifBlank { null },
                 backupId = obj.optString("backup_id").ifBlank { null },
                 incremental = obj.optBoolean("incremental", true),
             )

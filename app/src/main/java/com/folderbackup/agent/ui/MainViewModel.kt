@@ -1,28 +1,29 @@
 package com.folderbackup.agent.ui
 
 import android.app.Application
-import android.content.Intent
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.folderbackup.agent.backup.RootShell
 import com.folderbackup.agent.data.AppPreferences
-import com.folderbackup.agent.data.WatchedFolder
-import com.folderbackup.agent.network.BackupApiClient
-import com.folderbackup.agent.worker.SyncWorkerScheduler
+import com.folderbackup.agent.push.FcmTokenRegistrar
+import com.folderbackup.agent.registration.AccessibilityHelper
+import android.content.Intent
+import android.provider.Settings
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.util.UUID
+import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val preferences = AppPreferences(application)
-    private val api = BackupApiClient()
 
     val config = preferences.configFlow.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        // Eagerly: não zera config ao sair do app (WhileSubscribed(5s) deixava campos vazios na UI).
+        SharingStarted.Eagerly,
         null,
     )
 
@@ -30,68 +31,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var draftToken: String = ""
     var draftDeviceId: String = ""
 
-    fun syncDraftFromConfig() {
-        config.value?.let { cfg ->
-            draftApiUrl = cfg.apiBaseUrl
-            draftToken = cfg.apiToken
-            draftDeviceId = cfg.deviceId.ifBlank {
-                "device-${UUID.randomUUID().toString().take(8)}"
-            }
+    init {
+        viewModelScope.launch {
+            syncDraftFromConfig(preferences.getConfigSnapshot())
         }
+    }
+
+    fun syncDraftFromConfig(cfg: com.folderbackup.agent.data.AppConfig? = config.value) {
+        cfg ?: return
+        draftApiUrl = cfg.apiBaseUrl
+        draftToken = cfg.apiToken
+        draftDeviceId = cfg.deviceId.ifBlank { "mi9-se" }
     }
 
     fun saveApiSettings() {
         viewModelScope.launch {
             preferences.updateApi(draftApiUrl, draftToken, draftDeviceId)
+            withContext(Dispatchers.IO) {
+                FcmTokenRegistrar.registerIfPossible(getApplication())
+            }
+            preferences.setLastStatus("Configuração salva — pronto para comandos remotos")
         }
     }
 
-    fun setWifiOnly(enabled: Boolean) {
-        viewModelScope.launch { preferences.setSyncOnlyOnWifi(enabled) }
+    fun setUseRootEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferences.setUseRootEnabled(enabled) }
     }
 
-    fun testApiConnection() {
+    fun isAccessibilityEnabled(): Boolean =
+        AccessibilityHelper.isServiceEnabled(getApplication())
+
+    fun openAccessibilitySettings() {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        getApplication<Application>().startActivity(intent)
+    }
+
+    fun testRootAccess() {
         viewModelScope.launch {
-            val cfg = preferences.getConfigSnapshot().copy(
-                apiBaseUrl = draftApiUrl.trimEnd('/'),
-                apiToken = draftToken,
-                deviceId = draftDeviceId,
-            )
-            val result = api.ping(cfg)
-            preferences.setLastStatus(
-                result.fold(
-                    onSuccess = { body -> "API OK: $body" },
-                    onFailure = { err -> "API erro: ${err.message}" },
-                ),
-            )
+            preferences.setLastStatus("Testando root…")
+            val message = withContext(Dispatchers.IO) {
+                if (RootShell.isRootAvailable(refresh = true)) {
+                    "Root OK — Magisk concedeu superusuário"
+                } else {
+                    "Root indisponível — abra Magisk e permita Folder Backup Agent"
+                }
+            }
+            preferences.setLastStatus(message)
         }
-    }
-
-    fun syncNow() {
-        SyncWorkerScheduler.runNow(getApplication())
-        viewModelScope.launch {
-            preferences.setLastStatus("Sincronização manual enfileirada")
-        }
-    }
-
-    fun onFolderPicked(label: String, treeUri: Uri) {
-        val context = getApplication<Application>()
-        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        context.contentResolver.takePersistableUriPermission(treeUri, flags)
-
-        viewModelScope.launch {
-            preferences.addWatchedFolder(
-                WatchedFolder(
-                    id = UUID.randomUUID().toString(),
-                    label = label.ifBlank { treeUri.lastPathSegment ?: "Pasta" },
-                    treeUri = treeUri.toString(),
-                ),
-            )
-        }
-    }
-
-    fun removeFolder(id: String) {
-        viewModelScope.launch { preferences.removeWatchedFolder(id) }
     }
 
     companion object {

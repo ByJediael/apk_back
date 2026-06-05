@@ -1,0 +1,14 @@
+services:
+  backup-api:
+    build: ./backup-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      PORT: 8080
+      BACKUP_API_TOKEN: ${BACKUP_API_TOKEN:-troque-este-token}
+    volumes:
+      - backup-api-data:/app/data
+
+volumes:
+  backup-api-data:

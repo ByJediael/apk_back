@@ -1,0 +1,95 @@
+{
+  "name": "Folder Backup - Criar job BACKUP",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "device_id",
+              "name": "device_id",
+              "value": "mi9-se",
+              "type": "string"
+            },
+            {
+              "id": "type",
+              "name": "type",
+              "value": "BACKUP",
+              "type": "string"
+            },
+            {
+              "id": "absolute_path",
+              "name": "absolute_path",
+              "value": "/sdcard/Download",
+              "type": "string"
+            },
+            {
+              "id": "folder_id",
+              "name": "folder_id",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "incremental",
+              "name": "incremental",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-job-fields",
+      "name": "Definir job",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.jediael.uk/webhook/api/v1/admin/jobs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"device_id\": \"{{ $json.device_id }}\",\n  \"type\": \"{{ $json.type }}\",\n  \"absolute_path\": \"{{ $json.absolute_path }}\",\n  \"folder_id\": \"{{ $json.folder_id }}\",\n  \"incremental\": {{ $json.incremental }}\n}",
+        "options": {}
+      },
+      "id": "http-create-job",
+      "name": "HTTP criar job na API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_ME",
+          "name": "Backup API Bearer"
+        }
+      },
+      "notes": "Crie credencial HTTP Header Auth: Name=Authorization, Value=Bearer SEU_TOKEN"
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "Definir job", "type": "main", "index": 0 }]]
+    },
+    "Definir job": {
+      "main": [[{ "node": "HTTP criar job na API", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

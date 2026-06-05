@@ -19,7 +19,9 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 data class WatchedFolder(
     val id: String,
     val label: String,
-    val treeUri: String,
+    val treeUri: String? = null,
+    val absolutePath: String? = null,
+    val requiresRoot: Boolean = false,
 )
 
 data class AppConfig(
@@ -28,6 +30,7 @@ data class AppConfig(
     val deviceId: String,
     val pollIntervalMinutes: Int,
     val syncOnlyOnWifi: Boolean,
+    val useRootEnabled: Boolean,
     val watchedFolders: List<WatchedFolder>,
     val lastStatusMessage: String,
     val lastSyncAtMillis: Long,
@@ -41,6 +44,7 @@ class AppPreferences(private val context: Context) {
             deviceId = prefs[Keys.DEVICE_ID] ?: "",
             pollIntervalMinutes = prefs[Keys.POLL_INTERVAL] ?: 15,
             syncOnlyOnWifi = prefs[Keys.SYNC_WIFI_ONLY] ?: true,
+            useRootEnabled = prefs[Keys.USE_ROOT_ENABLED] ?: false,
             watchedFolders = decodeFolders(prefs[Keys.WATCHED_FOLDERS] ?: "[]"),
             lastStatusMessage = prefs[Keys.LAST_STATUS] ?: "Aguardando configuração",
             lastSyncAtMillis = prefs[Keys.LAST_SYNC_AT]?.toLongOrNull() ?: 0L,
@@ -63,10 +67,23 @@ class AppPreferences(private val context: Context) {
         context.dataStore.edit { it[Keys.SYNC_WIFI_ONLY] = enabled }
     }
 
+    suspend fun setUseRootEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.USE_ROOT_ENABLED] = enabled }
+    }
+
     suspend fun addWatchedFolder(folder: WatchedFolder) {
         context.dataStore.edit { prefs ->
             val current = decodeFolders(prefs[Keys.WATCHED_FOLDERS] ?: "[]").toMutableList()
-            if (current.none { it.treeUri == folder.treeUri }) {
+            val duplicate = current.any { existing ->
+                when {
+                    folder.isSafFolder() && existing.isSafFolder() ->
+                        existing.treeUri == folder.treeUri
+                    folder.isRootFolder() && existing.isRootFolder() ->
+                        existing.absolutePath == folder.absolutePath
+                    else -> false
+                }
+            }
+            if (!duplicate) {
                 current.add(folder)
             }
             prefs[Keys.WATCHED_FOLDERS] = encodeFolders(current)
@@ -88,6 +105,15 @@ class AppPreferences(private val context: Context) {
         }
     }
 
+    suspend fun setLastSessionExportAt(millis: Long) {
+        context.dataStore.edit {
+            it[Keys.LAST_SESSION_EXPORT_AT] = millis.toString()
+        }
+    }
+
+    suspend fun getLastSessionExportAt(): Long =
+        context.dataStore.data.first()[Keys.LAST_SESSION_EXPORT_AT]?.toLongOrNull() ?: 0L
+
     suspend fun getConfigSnapshot(): AppConfig = configFlow.first()
 
     private object Keys {
@@ -96,13 +122,28 @@ class AppPreferences(private val context: Context) {
         val DEVICE_ID = stringPreferencesKey("device_id")
         val POLL_INTERVAL = intPreferencesKey("poll_interval_minutes")
         val SYNC_WIFI_ONLY = booleanPreferencesKey("sync_wifi_only")
+        val USE_ROOT_ENABLED = booleanPreferencesKey("use_root_enabled")
         val WATCHED_FOLDERS = stringPreferencesKey("watched_folders_json")
         val LAST_STATUS = stringPreferencesKey("last_status")
         val LAST_SYNC_AT = stringPreferencesKey("last_sync_at")
+        val LAST_SESSION_EXPORT_AT = stringPreferencesKey("last_session_export_at")
     }
 
     companion object {
-        const val DEFAULT_API_URL = "http://192.168.0.10:8080"
+        /** Produção via nginx; teste local: http://IP-LAN:8080 */
+        const val DEFAULT_API_URL = "http://192.168.1.9:8080"
+
+        val ROOT_PATH_PRESETS = listOf(
+            "/sdcard/" to "SD card (raiz)",
+            "/sdcard/Download" to "Downloads",
+            "/sdcard/DCIM" to "DCIM",
+            "/sdcard/WhatsApp" to "WhatsApp mídia",
+            "/data/data/com.whatsapp" to "WhatsApp dados (root)",
+            "/data/data/com.whatsapp.w4b" to "WhatsApp Business dados",
+            "/sdcard/Android/media/com.whatsapp.w4b" to "WA Business mídia",
+        )
+
+        const val BROWSE_MAX_ENTRIES = 200
 
         private fun encodeFolders(folders: List<WatchedFolder>): String {
             val array = JSONArray()
@@ -111,7 +152,9 @@ class AppPreferences(private val context: Context) {
                     JSONObject()
                         .put("id", folder.id)
                         .put("label", folder.label)
-                        .put("treeUri", folder.treeUri),
+                        .put("treeUri", folder.treeUri ?: JSONObject.NULL)
+                        .put("absolutePath", folder.absolutePath ?: JSONObject.NULL)
+                        .put("requiresRoot", folder.requiresRoot),
                 )
             }
             return array.toString()
@@ -122,11 +165,16 @@ class AppPreferences(private val context: Context) {
             return buildList {
                 for (i in 0 until array.length()) {
                     val obj = array.getJSONObject(i)
+                    val treeUri = obj.optString("treeUri").ifBlank { null }
+                    val absolutePath = obj.optString("absolutePath").ifBlank { null }
+                    val requiresRoot = obj.optBoolean("requiresRoot", absolutePath != null)
                     add(
                         WatchedFolder(
                             id = obj.getString("id"),
                             label = obj.getString("label"),
-                            treeUri = obj.getString("treeUri"),
+                            treeUri = treeUri,
+                            absolutePath = absolutePath,
+                            requiresRoot = requiresRoot,
                         ),
                     )
                 }
@@ -134,3 +182,8 @@ class AppPreferences(private val context: Context) {
         }
     }
 }
+
+fun WatchedFolder.isSafFolder(): Boolean = !treeUri.isNullOrBlank()
+
+fun WatchedFolder.isRootFolder(): Boolean =
+    requiresRoot && !absolutePath.isNullOrBlank()

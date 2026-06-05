@@ -128,6 +128,64 @@ class BackupApiClient {
         }
     }
 
+    fun reportWhatsappSwitchStatus(
+        config: AppConfig,
+        requestId: String?,
+        sessionLabel: String,
+        status: String,
+        message: String,
+    ): Result<Unit> = runCatching {
+        val payload = JSONObject()
+            .put("request_id", requestId ?: JSONObject.NULL)
+            .put("session_label", sessionLabel)
+            .put("status", status)
+            .put("message", message)
+        postJson(
+            config,
+            "/api/v1/devices/${config.deviceId}/whatsapp/switch-status",
+            payload,
+        )
+    }
+
+    fun reportCommandResult(
+        config: AppConfig,
+        requestId: String?,
+        command: String,
+        sessionLabel: String,
+        phoneE164: String?,
+        status: String,
+        message: String,
+    ): Result<Unit> = runCatching {
+        val payload = JSONObject()
+            .put("request_id", requestId ?: JSONObject.NULL)
+            .put("command", command)
+            .put("session_label", sessionLabel)
+            .put("status", status)
+            .put("message", message)
+        if (!phoneE164.isNullOrBlank()) {
+            payload.put("phone_e164", phoneE164)
+        }
+        postJson(
+            config,
+            "/api/v1/devices/${config.deviceId}/command-result",
+            payload,
+        )
+    }
+
+    fun registerFcmToken(config: AppConfig, fcmToken: String): Result<Unit> = runCatching {
+        val payload = JSONObject().put("fcm_token", fcmToken)
+        val request = Request.Builder()
+            .url("${config.apiBaseUrl}/api/v1/devices/${config.deviceId}/fcm-token")
+            .put(payload.toString().toRequestBody(jsonMediaType))
+            .header("Authorization", bearer(config.apiToken))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code}: ${response.message}")
+            }
+        }
+    }
+
     fun ping(config: AppConfig): Result<String> = runCatching {
         val url = "${config.apiBaseUrl}/api/v1/health"
         val request = Request.Builder()
@@ -138,6 +196,31 @@ class BackupApiClient {
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("HTTP ${response.code}")
             response.body?.string() ?: "ok"
+        }
+    }
+
+    fun testN8nWebhook(config: AppConfig): Result<N8nTestResult> = runCatching {
+        val request = Request.Builder()
+            .url("${config.apiBaseUrl}/api/v1/admin/n8n/test")
+            .post("{}".toRequestBody(jsonMediaType))
+            .header("Authorization", bearer(config.apiToken))
+            .build()
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            val json = if (body.isNotBlank()) JSONObject(body) else JSONObject()
+            val result = N8nTestResult(
+                ok = json.optBoolean("ok", false),
+                n8nConfigured = json.optBoolean("n8n_configured", false),
+                n8nOk = json.optBoolean("n8n_ok", false),
+                n8nStatus = json.opt("n8n_status")?.let { v ->
+                    if (v is Number) v.toInt() else null
+                },
+                error = json.optString("error").ifBlank { null },
+            )
+            if (!response.isSuccessful && body.isBlank()) {
+                error("HTTP ${response.code}")
+            }
+            result
         }
     }
 

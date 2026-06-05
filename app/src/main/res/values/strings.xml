@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Folder Backup Agent</string>
-    <string name="notification_channel_name">Backup e sincronização</string>
-    <string name="notification_channel_desc">Jobs de backup e restore em execução</string>
+    <string name="app_name">WhatsApp Backup</string>
+    <string name="notification_channel_name">Comandos remotos</string>
+    <string name="notification_channel_desc">Limpar, exportar ou restaurar sessão WhatsApp</string>
     <string name="notification_title">Folder Backup Agent</string>
     <string name="notification_idle">Aguardando comandos da API</string>
-    <string name="notification_backup">Backup em andamento…</string>
-    <string name="notification_restore">Restauração em andamento…</string>
+    <string name="notification_backup">Operação em andamento…</string>
+    <string name="notification_restore">Operação em andamento…</string>
+    <string name="accessibility_service_description">Cadastro WhatsApp e código Evolution (dispositivos vinculados) via comando remoto.</string>
+    <string name="accessibility_enable_hint">Configurações → Acessibilidade → WhatsApp Backup → Ativar (obrigatório para montagem automática)</string>
 </resources>

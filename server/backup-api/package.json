@@ -1,0 +1,16 @@
+{
+  "name": "folder-backup-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API REST para o Folder Backup Agent (APK) — compatível com n8n.jediael.uk via reverse proxy",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^11.0.3"
+  }
+}

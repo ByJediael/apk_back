@@ -4,13 +4,34 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
-import com.folderbackup.agent.worker.SyncWorkerScheduler
+import com.folderbackup.agent.BuildConfig
+import com.folderbackup.agent.push.FcmTokenRegistrar
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class FolderBackupApplication : Application() {
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        SyncWorkerScheduler.schedule(this)
+        appScope.launch {
+            FcmTokenRegistrar.registerIfPossible(this@FolderBackupApplication)
+        }
+        if (BuildConfig.DEBUG) {
+            runDebugHooks()
+        }
+    }
+
+    private fun runDebugHooks() {
+        try {
+            val hooks = Class.forName("com.folderbackup.agent.debug.DebugAppHooks")
+            hooks.getMethod("onCreate", Application::class.java).invoke(null, this)
+        } catch (_: ReflectiveOperationException) {
+            // debug source set ausente
+        }
     }
 
     private fun createNotificationChannel() {
