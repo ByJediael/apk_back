@@ -43,6 +43,7 @@ class WhatsappRegistrationCoordinator(private val context: Context) {
         if (!phoneOk) {
             val msg = WhatsappRegistrationState.error ?: "Timeout ao digitar número no WhatsApp"
             WhatsappRegistrationState.markFailed(msg)
+            WhatsappRegistrationState.reset()
             report(requestId, "register_whatsapp", sessionLabel, phoneE164, "failed", msg)
             return@withContext Result.failure(IllegalStateException(msg))
         }
@@ -73,6 +74,7 @@ class WhatsappRegistrationCoordinator(private val context: Context) {
         )
         if (!profileOk) {
             val msg = "Timeout ao preencher código no WhatsApp"
+            WhatsappRegistrationState.reset()
             report(requestId, "submit_registration_code", label, phone, "failed", msg)
             return@withContext Result.failure(IllegalStateException(msg))
         }

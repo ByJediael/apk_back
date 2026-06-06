@@ -33,6 +33,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.folderbackup.agent.R
 import com.folderbackup.agent.registration.AccessibilityHelper
+import com.folderbackup.agent.registration.WhatsappAutomationController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.folderbackup.agent.data.AppPreferences
 import java.text.DateFormat
@@ -189,6 +190,12 @@ fun MainScreen(viewModel: MainViewModel) {
                             },
                         )
                         Spacer(Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.register_manual_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
                         Button(
                             onClick = {
                                 viewModel.openAccessibilitySettings()
@@ -197,6 +204,16 @@ fun MainScreen(viewModel: MainViewModel) {
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text("Abrir configurações de acessibilidade")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                WhatsappAutomationController.cancelAutomation(context)
+                                a11yEnabled = AccessibilityHelper.isServiceEnabled(context)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.release_touch))
                         }
                     }
                 }

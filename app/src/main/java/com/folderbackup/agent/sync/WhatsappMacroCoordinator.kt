@@ -1,9 +1,7 @@
 package com.folderbackup.agent.sync
 
 import android.content.Context
-import android.content.Intent
 import android.util.Log
-import com.folderbackup.agent.backup.WhatsappSessionExporter
 import com.folderbackup.agent.data.AppPreferences
 import com.folderbackup.agent.network.BackupApiClient
 import com.folderbackup.agent.registration.AccessibilityHelper
@@ -13,7 +11,6 @@ import com.folderbackup.agent.registration.WhatsappRegistrationAccessibilityServ
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 class WhatsappMacroCoordinator(private val context: Context) {
     private val preferences = AppPreferences(context)
@@ -56,55 +53,23 @@ class WhatsappMacroCoordinator(private val context: Context) {
         report(requestId, "macro_open_whatsapp", "running", "Abrindo WhatsApp pelo launcher…")
         WhatsappRegistrationAccessibilityService.pressHome()
         delay(600)
-        WhatsappMacroState.beginOpenWhatsapp()
 
-        val ok = withTimeoutOrNull(OPEN_TIMEOUT_MS) {
-            while (true) {
-                when (WhatsappMacroState.phase) {
-                    WhatsappMacroState.Phase.Done -> return@withTimeoutOrNull true
-                    WhatsappMacroState.Phase.Failed -> return@withTimeoutOrNull false
-                    else -> delay(400)
-                }
-            }
+        val open = WhatsappOpenHelper.open(context)
+        if (!open.ok) {
+            val msg = "Não foi possível abrir WhatsApp Business"
+            report(requestId, "macro_open_whatsapp", "failed", msg)
+            return@withContext Result.failure(IllegalStateException(msg))
         }
 
-        val usedFallback = ok != true
-        if (usedFallback) {
-            launchWhatsappFallback()
-            delay(1500)
-            if (WhatsappMacroState.phase == WhatsappMacroState.Phase.Failed) {
-                val msg = WhatsappMacroState.error ?: "Timeout ao abrir WhatsApp no launcher"
-                report(requestId, "macro_open_whatsapp", "failed", msg)
-                WhatsappMacroState.reset()
-                return@withContext Result.failure(IllegalStateException(msg))
-            }
-            WhatsappMacroState.markDone(fallback = true)
-        }
-
-        val status = if (usedFallback || WhatsappMacroState.usedFallback) {
-            "completed_with_fallback"
-        } else {
-            "completed"
-        }
-        val msg = if (status == "completed_with_fallback") {
-            "WhatsApp aberto (fallback intent)"
-        } else {
-            "WhatsApp aberto pelo ícone"
+        val status = if (open.method == "intent") "completed_with_fallback" else "completed"
+        val msg = when (open.method) {
+            "intent" -> "WhatsApp aberto (intent)"
+            else -> "WhatsApp aberto pelo ícone"
         }
         report(requestId, "macro_open_whatsapp", status, msg)
         preferences.setLastStatus(msg)
         RegistrationNotifier.show(context, "Macro", msg)
-        WhatsappMacroState.reset()
         Result.success(msg)
-    }
-
-    private fun launchWhatsappFallback() {
-        WhatsappMacroState.usedFallback = true
-        val intent = context.packageManager
-            .getLaunchIntentForPackage(WhatsappSessionExporter.WHATSAPP_PACKAGE)
-            ?: return
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
     }
 
     private suspend fun report(
@@ -128,6 +93,5 @@ class WhatsappMacroCoordinator(private val context: Context) {
 
     companion object {
         private const val TAG = "WaMacroCoordinator"
-        private const val OPEN_TIMEOUT_MS = 20_000L
     }
 }

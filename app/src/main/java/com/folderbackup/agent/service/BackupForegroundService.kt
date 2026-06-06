@@ -10,17 +10,21 @@ import androidx.core.app.NotificationCompat
 import com.folderbackup.agent.FolderBackupApplication
 import com.folderbackup.agent.MainActivity
 import com.folderbackup.agent.R
+import com.folderbackup.agent.registration.WhatsappAutomationGate
 
 class BackupForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        isRunning = true
         val notification = buildNotification(getString(R.string.notification_backup))
         startForeground(NOTIFICATION_ID, notification)
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        isRunning = false
+        WhatsappAutomationGate.releaseAll()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
@@ -43,6 +47,10 @@ class BackupForegroundService : Service() {
 
     companion object {
         private const val NOTIFICATION_ID = 1001
+
+        @Volatile
+        var isRunning: Boolean = false
+            private set
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, BackupForegroundService::class.java))

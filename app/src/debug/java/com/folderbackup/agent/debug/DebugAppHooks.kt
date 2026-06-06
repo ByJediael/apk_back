@@ -14,6 +14,7 @@ class DebugAppHooks {
 
         @JvmStatic
         fun onCreate(app: Application) {
+            DebugLinkDeviceReceiver.register(app)
             scope.launch(Dispatchers.IO) {
                 val prefs = AppPreferences(app)
                 val cfg = prefs.getConfigSnapshot()

@@ -7,7 +7,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.folderbackup.agent.backup.RootShell
 import com.folderbackup.agent.data.AppPreferences
+import com.folderbackup.agent.network.BackupApiClient
 import com.folderbackup.agent.push.FcmTokenRegistrar
+import com.folderbackup.agent.sync.SessionInventoryReporter
 import com.folderbackup.agent.registration.AccessibilityHelper
 import android.content.Intent
 import android.provider.Settings
@@ -46,11 +48,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveApiSettings() {
         viewModelScope.launch {
-            preferences.updateApi(draftApiUrl, draftToken, draftDeviceId)
-            withContext(Dispatchers.IO) {
-                FcmTokenRegistrar.registerIfPossible(getApplication())
+            val baseUrl = draftApiUrl.trim().trimEnd('/')
+            val token = draftToken.trim()
+            val deviceId = draftDeviceId.trim().ifBlank { "mi9-se" }
+            draftApiUrl = baseUrl
+            draftToken = token
+            draftDeviceId = deviceId
+            preferences.updateApi(baseUrl, token, deviceId)
+            val status = withContext(Dispatchers.IO) {
+                val config = preferences.getConfigSnapshot()
+                val api = BackupApiClient()
+                val ping = api.ping(config)
+                ping.fold(
+                    onSuccess = {
+                        FcmTokenRegistrar.registerIfPossible(getApplication())
+                        SessionInventoryReporter.syncIfConfigured(getApplication())
+                        "Servidor OK — device $deviceId (veja slot na central)"
+                    },
+                    onFailure = { err ->
+                        "Falha ao conectar: ${err.message ?: err}"
+                    },
+                )
             }
-            preferences.setLastStatus("Configuração salva — pronto para comandos remotos")
+            preferences.setLastStatus(status)
         }
     }
 

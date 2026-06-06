@@ -93,4 +93,14 @@ object WhatsappRegistrationState {
         pairingCode = null
         error = null
     }
+
+    /** Fases em que o usuário deve usar o WhatsApp manualmente (sem setText/cliques). */
+    fun isInactive(): Boolean = phase in setOf(
+        Phase.Idle,
+        Phase.WaitCode,
+        Phase.Done,
+        Phase.Failed,
+        Phase.PairingDone,
+        Phase.EnterPairingCode,
+    )
 }

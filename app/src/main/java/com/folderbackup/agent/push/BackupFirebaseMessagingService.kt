@@ -136,6 +136,18 @@ class BackupFirebaseMessagingService : FirebaseMessagingService() {
                     }
                 }
             }
+            "macro_navigate_link_phone" -> {
+                val requestId = message.data["request_id"]?.takeIf { it.isNotBlank() }
+                Log.i(TAG, "FCM macro_navigate_link_phone")
+                scope.launch {
+                    try {
+                        BackupForegroundService.start(applicationContext)
+                        WhatsappMountCoordinator(applicationContext).navigateToLinkWithPhone(requestId)
+                    } finally {
+                        BackupForegroundService.stop(applicationContext)
+                    }
+                }
+            }
             "submit_pairing_code" -> {
                 val requestId = message.data["request_id"]?.takeIf { it.isNotBlank() }
                 val pairingCode = message.data["pairing_code"]?.trim().orEmpty()

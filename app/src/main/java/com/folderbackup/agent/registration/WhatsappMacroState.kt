@@ -44,4 +44,6 @@ object WhatsappMacroState {
         error = null
         usedFallback = false
     }
+
+    fun isActive(): Boolean = phase in setOf(Phase.GoHome, Phase.FindWhatsAppIcon)
 }

@@ -5,6 +5,9 @@ import android.content.Intent
 import com.folderbackup.agent.backup.WhatsappSessionExporter
 import com.folderbackup.agent.data.AppPreferences
 import com.folderbackup.agent.network.BackupApiClient
+import com.folderbackup.agent.sync.SessionInventoryReporter
+import com.folderbackup.agent.registration.WhatsappMacroState
+import com.folderbackup.agent.registration.WhatsappRegistrationState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -13,6 +16,7 @@ class SessionSwitchCoordinator(private val context: Context) {
     private val api = BackupApiClient()
 
     suspend fun clear(requestId: String? = null): Result<String> = withContext(Dispatchers.IO) {
+        stopAutomationOverlays()
         val config = preferences.getConfigSnapshot()
         report(config, requestId, "(limpar)", "running", "Limpando sessão do WhatsApp…")
         val result = WhatsappSessionExporter.clearWhatsappSession()
@@ -21,6 +25,7 @@ class SessionSwitchCoordinator(private val context: Context) {
                 val msg = "Sessão do WhatsApp limpa. Cadastre um número ou restaure um backup."
                 report(config, requestId, "(limpar)", "completed", msg)
                 preferences.setLastStatus(msg)
+                SessionInventoryReporter.syncIfConfigured(context)
                 Result.success(msg)
             },
             onFailure = { err ->
@@ -44,6 +49,7 @@ class SessionSwitchCoordinator(private val context: Context) {
                     reportExport(config, requestId, sessionLabel, "completed", msg)
                     preferences.setLastStatus(msg)
                     preferences.setLastSessionExportAt(System.currentTimeMillis())
+                    SessionInventoryReporter.syncIfConfigured(context)
                     Result.success(msg)
                 },
                 onFailure = { err ->
@@ -61,6 +67,7 @@ class SessionSwitchCoordinator(private val context: Context) {
         openWhatsapp: Boolean,
         sessionFolder: String? = null,
     ): Result<String> = withContext(Dispatchers.IO) {
+        stopAutomationOverlays()
         val config = preferences.getConfigSnapshot()
         if (config.apiToken.isBlank() || config.deviceId.isBlank()) {
             return@withContext Result.failure(IllegalStateException("API não configurada no app"))
@@ -88,6 +95,7 @@ class SessionSwitchCoordinator(private val context: Context) {
                 val msg = "${sessionLabel} ativo em ${"%.1f".format(secs)}s"
                 report(config, requestId, sessionLabel, "completed", msg)
                 preferences.setLastStatus(msg)
+                SessionInventoryReporter.syncIfConfigured(context)
                 Result.success(msg)
             },
             onFailure = { err ->
@@ -139,5 +147,11 @@ class SessionSwitchCoordinator(private val context: Context) {
             ?: return
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
+    }
+
+    /** Libera o WhatsApp para toque manual após automação remota. */
+    private fun stopAutomationOverlays() {
+        WhatsappRegistrationState.reset()
+        WhatsappMacroState.reset()
     }
 }

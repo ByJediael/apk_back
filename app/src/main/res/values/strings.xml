@@ -9,4 +9,6 @@
     <string name="notification_restore">Operação em andamento…</string>
     <string name="accessibility_service_description">Cadastro WhatsApp e código Evolution (dispositivos vinculados) via comando remoto.</string>
     <string name="accessibility_enable_hint">Configurações → Acessibilidade → WhatsApp Backup → Ativar (obrigatório para montagem automática)</string>
+    <string name="release_touch">Liberar toque no WhatsApp</string>
+    <string name="register_manual_hint">Cadastre o número manualmente com Acessibilidade DESLIGADA. Se o teclado não abrir no MIUI, use Modo ultra economia ou oculte root no Magisk (DenyList → WhatsApp).</string>
 </resources>

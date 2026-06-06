@@ -136,29 +136,15 @@ object WhatsappSessionExporter {
             error("Root indisponível — permita no Magisk")
         }
 
-        val dataPath = "/data/user/0/$WHATSAPP_PACKAGE"
-        val dataDePath = "/data/user_de/0/$WHATSAPP_PACKAGE"
-        val qData = RootShell.shellQuote(dataPath)
-        val qDataDe = RootShell.shellQuote(dataDePath)
-
+        // Só pm clear — o script antigo (rm + mkdir + chown manual) deixava o WA
+        // num estado que trava o toque na tela de boas-vindas em alguns MIUI.
         val script = """
             set -e
             am force-stop $WHATSAPP_PACKAGE
             killall $WHATSAPP_PACKAGE 2>/dev/null || true
-            sleep 0.3
-            pm clear $WHATSAPP_PACKAGE 2>/dev/null || true
-            find $qData -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
-            find $qDataDe -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
-            mkdir -p $qData $qDataDe
-            UID=${'$'}(stat -c %u $qData)
-            chown -R ${'$'}UID:${'$'}UID $qData $qDataDe
-            chmod -R u+rwX,go-rwx $qData $qDataDe
-            restorecon -RF $qData $qDataDe 2>/dev/null || true
-            FILES=${'$'}(find $qData $qDataDe -type f 2>/dev/null | wc -l)
-            if [ "${'$'}FILES" -gt 0 ]; then
-              echo "CLEAR_INCOMPLETE:${'$'}FILES"
-              exit 1
-            fi
+            sleep 0.5
+            pm clear $WHATSAPP_PACKAGE
+            am force-stop $WHATSAPP_PACKAGE
             echo OK
         """.trimIndent()
 
@@ -168,6 +154,7 @@ object WhatsappSessionExporter {
         if (!output.contains("OK")) {
             error("Limpar sessão incompleto: $output")
         }
+        Thread.sleep(800)
     }
 
     fun restoreSession(folderName: String): Result<Unit> = runCatching {

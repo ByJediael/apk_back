@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.os.Build
 import com.folderbackup.agent.BuildConfig
 import com.folderbackup.agent.push.FcmTokenRegistrar
+import com.folderbackup.agent.sync.SessionInventoryReporter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -19,6 +20,7 @@ class FolderBackupApplication : Application() {
         createNotificationChannel()
         appScope.launch {
             FcmTokenRegistrar.registerIfPossible(this@FolderBackupApplication)
+            SessionInventoryReporter.syncIfConfigured(this@FolderBackupApplication)
         }
         if (BuildConfig.DEBUG) {
             runDebugHooks()

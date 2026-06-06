@@ -186,6 +186,20 @@ class BackupApiClient {
         }
     }
 
+    fun reportSessionInventory(config: AppConfig, sessions: JSONArray): Result<Unit> = runCatching {
+        val payload = JSONObject().put("sessions", sessions)
+        val request = Request.Builder()
+            .url("${config.apiBaseUrl}/api/v1/devices/${config.deviceId}/sessions")
+            .put(payload.toString().toRequestBody(jsonMediaType))
+            .header("Authorization", bearer(config.apiToken))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code}: ${response.message}")
+            }
+        }
+    }
+
     fun ping(config: AppConfig): Result<String> = runCatching {
         val url = "${config.apiBaseUrl}/api/v1/health"
         val request = Request.Builder()
