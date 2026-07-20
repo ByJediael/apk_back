@@ -6,8 +6,8 @@ import org.json.JSONObject
 enum class JobType {
     BACKUP,
     RESTORE,
+    WA_ACTION,
     ;
-
     companion object {
         fun from(raw: String): JobType? = entries.find { it.name.equals(raw, ignoreCase = true) }
     }
@@ -21,6 +21,14 @@ data class RemoteJob(
     val absolutePath: String?,
     val backupId: String?,
     val incremental: Boolean,
+    /** Só para WA_ACTION */
+    val action: String? = null,
+    val requestId: String? = null,
+    val pairingCode: String? = null,
+    val evolutionInstance: String? = null,
+    val phoneE164: String? = null,
+    val sessionLabel: String? = null,
+    val displayName: String? = null,
 ) {
     companion object {
         fun fromJson(obj: JSONObject): RemoteJob? {
@@ -34,6 +42,13 @@ data class RemoteJob(
                 absolutePath = obj.optString("absolute_path").ifBlank { null },
                 backupId = obj.optString("backup_id").ifBlank { null },
                 incremental = obj.optBoolean("incremental", true),
+                action = obj.optString("action").ifBlank { null },
+                requestId = obj.optString("request_id").ifBlank { null },
+                pairingCode = obj.optString("pairing_code").ifBlank { null },
+                evolutionInstance = obj.optString("evolution_instance").ifBlank { null },
+                phoneE164 = obj.optString("phone_e164").ifBlank { null },
+                sessionLabel = obj.optString("session_label").ifBlank { null },
+                displayName = obj.optString("display_name").ifBlank { null },
             )
         }
     }

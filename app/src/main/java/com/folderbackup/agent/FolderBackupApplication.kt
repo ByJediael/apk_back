@@ -22,6 +22,7 @@ class FolderBackupApplication : Application() {
             FcmTokenRegistrar.registerIfPossible(this@FolderBackupApplication)
             SessionInventoryReporter.syncIfConfigured(this@FolderBackupApplication)
         }
+        com.folderbackup.agent.sync.DeviceCommandPoller.start(this)
         if (BuildConfig.DEBUG) {
             runDebugHooks()
         }

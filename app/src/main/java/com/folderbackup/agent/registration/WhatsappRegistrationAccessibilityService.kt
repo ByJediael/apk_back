@@ -1,9 +1,12 @@
 package com.folderbackup.agent.registration
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
@@ -18,6 +21,7 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        Log.i(TAG, "onServiceConnected: Accessibility Service Connected and Active")
         instance = this
         profileNameApplied = false
         if (!BackupForegroundService.isRunning) {
@@ -26,12 +30,15 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        Log.i(TAG, "onDestroy: Accessibility Service Destroyed")
         instance = null
         super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: android.view.accessibility.AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
+        Log.v(TAG, "onAccessibilityEvent: pkg=$pkg phase=${WhatsappMacroState.phase} eventType=${event?.eventType}")
+        val isPackageInstaller = pkg.contains("packageinstaller", ignoreCase = true)
 
         if (!BackupForegroundService.isRunning) {
             WhatsappAutomationGate.releaseOrphanedAutomation()
@@ -44,6 +51,64 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         if (pkg == WhatsappSessionExporter.WHATSAPP_PACKAGE &&
             !WhatsappAutomationGate.allowAutomation()
         ) {
+            return
+        }
+
+        if (WhatsappMacroState.phase == WhatsappMacroState.Phase.UninstallWhatsApp) {
+            if (isPackageInstaller) {
+                val root = getRoot(event) ?: return
+                val now = System.currentTimeMillis()
+                if (now - lastActionAt < 1000) return
+                val clickTexts = listOf("OK", "DESINSTALAR", "UNINSTALL", "CONFIRMAR", "CONFIRM")
+                for (text in clickTexts) {
+                    if (clickByText(root, text, partial = false)) {
+                        lastActionAt = now
+                        Log.i(TAG, "Clique automático na desinstalação: $text")
+                        return
+                    }
+                }
+            } else {
+                if (!isAppInstalled(WhatsappSessionExporter.WHATSAPP_PACKAGE)) {
+                    Log.i(TAG, "WhatsApp Business desinstalado com sucesso (sem root).")
+                    WhatsappMacroState.markDone()
+                }
+            }
+            return
+        }
+
+        if (WhatsappMacroState.phase == WhatsappMacroState.Phase.InstallWhatsAppFromPlayStore) {
+            if (pkg == "com.android.vending") {
+                val root = getRoot(event)
+                if (root == null) {
+                    Log.v(TAG, "Install phase: getRoot returned null")
+                    return
+                }
+                Log.v(TAG, "Install phase: root class=${root.className} childCount=${root.childCount}")
+                val now = System.currentTimeMillis()
+                if (now - lastActionAt < 1200) return
+                val clickTexts = listOf("INSTALAR", "INSTALL", "REINSTALAR", "REINSTALL", "ATUALIZAR", "UPDATE")
+                for (text in clickTexts) {
+                    if (clickByText(root, text, partial = false)) {
+                        lastActionAt = now
+                        Log.i(TAG, "Clique automático na instalação do Play Store: $text")
+                        return
+                    }
+                }
+            } else {
+                if (isAppInstalled(WhatsappSessionExporter.WHATSAPP_PACKAGE)) {
+                    Log.i(TAG, "WhatsApp Business instalado com sucesso via Play Store. Abrindo o aplicativo...")
+                    try {
+                        val launchIntent = packageManager.getLaunchIntentForPackage(WhatsappSessionExporter.WHATSAPP_PACKAGE)
+                        if (launchIntent != null) {
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(launchIntent)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Falha ao abrir WhatsApp instalado: ${e.message}")
+                    }
+                    WhatsappMacroState.markDone()
+                }
+            }
             return
         }
 
@@ -77,7 +142,9 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         }
 
         if (pkg != WhatsappSessionExporter.WHATSAPP_PACKAGE &&
-            pkg != "com.android.settings"
+            pkg != "com.android.settings" &&
+            pkg != "com.android.vending" &&
+            !isPackageInstaller
         ) {
             return
         }
@@ -212,8 +279,11 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
                     Log.i(TAG, "Menu ⋮ aberto")
                     return true
                 }
-                // Fallback: Configurações → Aparelhos conectados
-                val settings = listOf("CONFIGURAÇÕES", "CONFIGURACOES", "SETTINGS")
+                // Fallback: Configurações → Aparelhos conectados (PT / EN / ES)
+                val settings = listOf(
+                    "CONFIGURAÇÕES", "CONFIGURACOES", "SETTINGS",
+                    "CONFIGURACIÓN", "CONFIGURACION", "AJUSTES",
+                )
                 for (text in settings) {
                     if (clickByText(root, text, partial = true)) {
                         WhatsappLinkDeviceState.advanceFrom(WhatsappLinkDeviceState.Step.OpenOverflowMenu)
@@ -229,6 +299,8 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
                     "APARELHOS CONECTADOS",
                     "APARELHOS VINCULADOS",
                     "LINKED DEVICES",
+                    "DISPOSITIVOS VINCULADOS",
+                    "DISPOSITIVOS CONECTADOS",
                 )
                 for (text in texts) {
                     if (clickByText(root, text, partial = true)) {
@@ -242,9 +314,14 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
                     "CONECTAR DISPOSITIVO",
                     "CONECTAR UM DISPOSITIVO",
                     "VINCULAR DISPOSITIVO",
+                    "VINCULAR UN DISPOSITIVO",
+                    "VINCULAR UN DISPOSITIVO",
                     "LINK A DEVICE",
                     "CONNECT A DEVICE",
                     "ADD DEVICE",
+                    "AGREGAR DISPOSITIVO",
+                    "AÑADIR DISPOSITIVO",
+                    "ANADIR DISPOSITIVO",
                 )
                 for (text in texts) {
                     if (clickByText(root, text, partial = true)) {
@@ -264,6 +341,17 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
                     "LINK WITH PHONE NUMBER",
                     "LINK WITH PHONE",
                     "USAR NÚMERO DE TELEFONE",
+                    // ES (Colômbia / LatAm)
+                    "VINCULAR CON EL NÚMERO DE TELÉFONO",
+                    "VINCULAR CON EL NUMERO DE TELEFONO",
+                    "VINCULAR CON NÚMERO DE TELÉFONO",
+                    "VINCULAR CON NUMERO DE TELEFONO",
+                    "CONECTAR CON EL NÚMERO DE TELÉFONO",
+                    "CONECTAR CON EL NUMERO DE TELEFONO",
+                    "CONECTAR CON NÚMERO",
+                    "CONECTAR CON NUMERO",
+                    "USAR NÚMERO DE TELÉFONO",
+                    "USAR NUMERO DE TELEFONO",
                 )
                 for (text in texts) {
                     if (clickByText(root, text, partial = true)) {
@@ -419,6 +507,10 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             "NEXT",
             "CONTINUAR",
             "OK",
+            // ES
+            "SIGUIENTE",
+            "CONTINUAR",
+            "VINCULAR DISPOSITIVO",
         )
         for (text in texts) {
             if (clickByText(root, text, partial = true)) {
@@ -503,14 +595,155 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
     }
 
     private fun clickByText(root: AccessibilityNodeInfo, text: String, partial: Boolean): Boolean {
-        val nodes = root.findAccessibilityNodeInfosByText(text)
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        findNodesByTextRecursive(root, text, partial, nodes)
+        if (nodes.isNotEmpty()) {
+            Log.d(TAG, "clickByText: found ${nodes.size} candidate nodes matching '$text' recursively")
+        }
         for (node in nodes) {
-            if (partial || node.text?.toString()?.equals(text, ignoreCase = true) == true) {
-                if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                    return true
-                }
-                if (performClickOnParent(node)) return true
+            val nodeText = node.text?.toString() ?: node.contentDescription?.toString()
+            Log.d(TAG, "clickByText matches: '$nodeText' (class=${node.className} clickable=${node.isClickable})")
+            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                Log.d(TAG, "clickByText: clicked node directly")
+                recycleNodes(nodes)
+                return true
             }
+            if (performClickOnParent(node)) {
+                Log.d(TAG, "clickByText: clicked parent of node")
+                recycleNodes(nodes)
+                return true
+            }
+            if (clickNodeByGesture(node)) {
+                Log.d(TAG, "clickByText: clicked node via gesture")
+                recycleNodes(nodes)
+                return true
+            }
+            Log.w(TAG, "clickByText: failed to click matched node or parents")
+        }
+        recycleNodes(nodes)
+        return false
+    }
+
+    private fun findNodesByTextRecursive(
+        root: AccessibilityNodeInfo,
+        text: String,
+        partial: Boolean,
+        list: MutableList<AccessibilityNodeInfo>
+    ) {
+        val nodeText = root.text?.toString()
+        val contentDesc = root.contentDescription?.toString()
+        
+        val textMatches = if (partial) {
+            nodeText?.contains(text, ignoreCase = true) == true
+        } else {
+            nodeText?.equals(text, ignoreCase = true) == true
+        }
+        
+        val descMatches = if (partial) {
+            contentDesc?.contains(text, ignoreCase = true) == true
+        } else {
+            contentDesc?.equals(text, ignoreCase = true) == true
+        }
+
+        if (textMatches || descMatches) {
+            list.add(AccessibilityNodeInfo.obtain(root))
+        }
+        for (i in 0 until root.childCount) {
+            val child = root.getChild(i) ?: continue
+            findNodesByTextRecursive(child, text, partial, list)
+        }
+    }
+
+    private fun recycleNodes(nodes: List<AccessibilityNodeInfo>) {
+        for (node in nodes) {
+            try {
+                node.recycle()
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+
+    private fun getRoot(event: android.view.accessibility.AccessibilityEvent?): AccessibilityNodeInfo? {
+        val eventPkg = event?.packageName?.toString()
+        
+        try {
+            val winList = windows
+            if (winList != null) {
+                // First pass: look for an active or focused window that matches event package or target packages
+                for (win in winList) {
+                    val rootWin = win.root ?: continue
+                    val pkgName = rootWin.packageName?.toString()
+                    val isTargetPkg = pkgName == eventPkg || 
+                                      pkgName == "com.android.vending" || 
+                                      pkgName == "com.whatsapp.w4b" || 
+                                      pkgName == "com.android.settings"
+                    if (isTargetPkg && (win.isActive || win.isFocused)) {
+                        Log.v(TAG, "getRoot: resolved active/focused target window: pkg=$pkgName class=${rootWin.className} childCount=${rootWin.childCount}")
+                        return rootWin
+                    }
+                }
+                
+                // Second pass: any window that matches target packages
+                for (win in winList) {
+                    val rootWin = win.root ?: continue
+                    val pkgName = rootWin.packageName?.toString()
+                    val isTargetPkg = pkgName == eventPkg || 
+                                      pkgName == "com.android.vending" || 
+                                      pkgName == "com.whatsapp.w4b" || 
+                                      pkgName == "com.android.settings"
+                    if (isTargetPkg) {
+                        Log.v(TAG, "getRoot: resolved non-active target window: pkg=$pkgName class=${rootWin.className} childCount=${rootWin.childCount}")
+                        return rootWin
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+
+        val rootActive = rootInActiveWindow
+        if (rootActive != null) return rootActive
+        
+        if (event != null) {
+            val source = event.source
+            if (source != null) {
+                val rootSrc = getRootNode(source)
+                Log.d(TAG, "getRoot: resolved via event source: class=${rootSrc.className}")
+                return rootSrc
+            }
+        }
+        return null
+    }
+
+    private fun getRootNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        var current = node
+        while (current.parent != null) {
+            current = current.parent
+        }
+        return current
+    }
+
+    private fun clickNodeByGesture(node: AccessibilityNodeInfo): Boolean {
+        try {
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val x = rect.centerX().toFloat()
+            val y = rect.centerY().toFloat()
+            Log.d(TAG, "clickNodeByGesture: bounds=$rect center=($x, $y)")
+            if (x <= 0 || y <= 0) return false
+
+            val path = Path().apply {
+                moveTo(x, y)
+            }
+            val gestureBuilder = GestureDescription.Builder()
+            val strokeDescription = GestureDescription.StrokeDescription(path, 0, 80)
+            gestureBuilder.addStroke(strokeDescription)
+            val success = dispatchGesture(gestureBuilder.build(), null, null)
+            Log.d(TAG, "dispatchGesture result: $success")
+            return success
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao executar gesto de clique: ${e.message}")
         }
         return false
     }
@@ -523,9 +756,13 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
 
     private fun performClickOnParent(node: AccessibilityNodeInfo): Boolean {
         var current: AccessibilityNodeInfo? = node
-        repeat(6) {
+        repeat(6) { i ->
             current = current?.parent ?: return@repeat
-            if (current?.isClickable == true && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            val isClickable = current?.isClickable == true
+            val className = current?.className?.toString()
+            Log.v(TAG, "Parent level $i: class=$className clickable=$isClickable")
+            if (isClickable && current?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
+                Log.d(TAG, "Clicked parent class=$className at level $i")
                 return true
             }
         }
@@ -614,6 +851,15 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             pkg == "com.mi.android.globallauncher" ||
             pkg == "com.sec.android.app.launcher" ||
             pkg == "com.google.android.apps.nexuslauncher"
+    }
+
+    private fun isAppInstalled(packageName: String): Boolean {
+        return try {
+            packageManager.getPackageInfo(packageName, 0)
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     companion object {

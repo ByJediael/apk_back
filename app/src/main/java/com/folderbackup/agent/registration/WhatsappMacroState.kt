@@ -5,6 +5,8 @@ object WhatsappMacroState {
         Idle,
         GoHome,
         FindWhatsAppIcon,
+        UninstallWhatsApp,
+        InstallWhatsAppFromPlayStore,
         Done,
         Failed,
     }
@@ -45,5 +47,10 @@ object WhatsappMacroState {
         usedFallback = false
     }
 
-    fun isActive(): Boolean = phase in setOf(Phase.GoHome, Phase.FindWhatsAppIcon)
+    fun isActive(): Boolean = phase in setOf(
+        Phase.GoHome,
+        Phase.FindWhatsAppIcon,
+        Phase.UninstallWhatsApp,
+        Phase.InstallWhatsAppFromPlayStore
+    )
 }

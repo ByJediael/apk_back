@@ -16,6 +16,12 @@ object FcmTokenRegistrar {
 
     suspend fun registerIfPossible(context: Context) {
         try {
+            try {
+                deleteToken()
+                Log.i(TAG, "FCM token deletado para forçar renovação")
+            } catch (e: Exception) {
+                Log.w(TAG, "Erro ao deletar token antigo: ${e.message}")
+            }
             val token = fetchToken()
             if (com.folderbackup.agent.BuildConfig.DEBUG) {
                 Log.i(TAG, "FCM token (registrar no servidor): $token")
@@ -44,6 +50,12 @@ object FcmTokenRegistrar {
                 },
             )
         }
+    }
+
+    private suspend fun deleteToken(): Unit = suspendCancellableCoroutine { cont ->
+        FirebaseMessaging.getInstance().deleteToken()
+            .addOnSuccessListener { cont.resume(Unit) }
+            .addOnFailureListener { cont.resumeWithException(it) }
     }
 
     private suspend fun fetchToken(): String = suspendCancellableCoroutine { cont ->

@@ -2,13 +2,17 @@ package com.folderbackup.agent.sync
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import com.folderbackup.agent.backup.RootShell
 import com.folderbackup.agent.backup.WhatsappSessionExporter
 import com.folderbackup.agent.data.AppPreferences
 import com.folderbackup.agent.network.BackupApiClient
 import com.folderbackup.agent.sync.SessionInventoryReporter
+import com.folderbackup.agent.registration.AccessibilityHelper
 import com.folderbackup.agent.registration.WhatsappMacroState
 import com.folderbackup.agent.registration.WhatsappRegistrationState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 class SessionSwitchCoordinator(private val context: Context) {
@@ -19,22 +23,89 @@ class SessionSwitchCoordinator(private val context: Context) {
         stopAutomationOverlays()
         val config = preferences.getConfigSnapshot()
         report(config, requestId, "(limpar)", "running", "Limpando sessão do WhatsApp…")
-        val result = WhatsappSessionExporter.clearWhatsappSession()
-        result.fold(
-            onSuccess = {
-                val msg = "Sessão do WhatsApp limpa. Cadastre um número ou restaure um backup."
-                report(config, requestId, "(limpar)", "completed", msg)
-                preferences.setLastStatus(msg)
-                SessionInventoryReporter.syncIfConfigured(context)
-                Result.success(msg)
-            },
-            onFailure = { err ->
-                val msg = err.message ?: "Falha ao limpar"
-                report(config, requestId, "(limpar)", "failed", msg)
-                preferences.setLastStatus("Limpar sessão falhou: $msg")
-                Result.failure(err)
-            },
-        )
+        
+        if (RootShell.isRootAvailable()) {
+            val result = WhatsappSessionExporter.clearWhatsappSession()
+            result.fold(
+                onSuccess = {
+                    val msg = "Sessão do WhatsApp limpa. Cadastre um número ou restaure um backup."
+                    report(config, requestId, "(limpar)", "completed", msg)
+                    preferences.setLastStatus(msg)
+                    SessionInventoryReporter.syncIfConfigured(context)
+                    Result.success(msg)
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "Falha ao limpar"
+                    report(config, requestId, "(limpar)", "failed", msg)
+                    preferences.setLastStatus("Limpar sessão falhou: $msg")
+                    Result.failure(err)
+                },
+            )
+        } else {
+            uninstallWhatsappWithoutRoot(requestId)
+        }
+    }
+
+    internal suspend fun uninstallWhatsappWithoutRoot(requestId: String?): Result<String> = withContext(Dispatchers.IO) {
+        val config = preferences.getConfigSnapshot()
+        
+        if (!AccessibilityHelper.isServiceEnabled(context)) {
+            val msg = "Acessibilidade desativada. Ative Acessibilidade -> Folder Backup Agent para desinstalar sem root."
+            report(config, requestId, "(limpar)", "failed", msg)
+            preferences.setLastStatus(msg)
+            return@withContext Result.failure(IllegalStateException(msg))
+        }
+
+        if (!isAppInstalled(WhatsappSessionExporter.WHATSAPP_PACKAGE)) {
+            val msg = "WhatsApp Business não está instalado. Pulando desinstalação."
+            report(config, requestId, "(limpar)", "completed", msg)
+            preferences.setLastStatus(msg)
+            return@withContext Result.success(msg)
+        }
+
+        report(config, requestId, "(limpar)", "running", "Desinstalando WhatsApp sem root...")
+        
+        WhatsappMacroState.beginHome()
+        WhatsappMacroState.phase = WhatsappMacroState.Phase.UninstallWhatsApp
+
+        try {
+            val intent = Intent(Intent.ACTION_DELETE).apply {
+                data = Uri.parse("package:${WhatsappSessionExporter.WHATSAPP_PACKAGE}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            val msg = "Falha ao abrir diálogo de desinstalação: ${e.message}"
+            WhatsappMacroState.markFailed(msg)
+            report(config, requestId, "(limpar)", "failed", msg)
+            preferences.setLastStatus(msg)
+            return@withContext Result.failure(e)
+        }
+
+        // Aguarda a acessibilidade confirmar e desinstalar por até 30s
+        var elapsed = 0
+        while (elapsed < 30) {
+            if (!isAppInstalled(WhatsappSessionExporter.WHATSAPP_PACKAGE)) {
+                WhatsappMacroState.markDone()
+                break
+            }
+            delay(1000)
+            elapsed++
+        }
+
+        if (WhatsappMacroState.phase == WhatsappMacroState.Phase.Done) {
+            val msg = "WhatsApp Business desinstalado com sucesso (sem root)."
+            report(config, requestId, "(limpar)", "completed", msg)
+            preferences.setLastStatus(msg)
+            WhatsappMacroState.reset()
+            Result.success(msg)
+        } else {
+            val err = WhatsappMacroState.error ?: "Tempo limite esgotado para desinstalação automática"
+            report(config, requestId, "(limpar)", "failed", err)
+            preferences.setLastStatus("Limpar/Desinstalar falhou: $err")
+            WhatsappMacroState.reset()
+            Result.failure(IllegalStateException(err))
+        }
     }
 
     suspend fun export(sessionLabel: String, requestId: String? = null): Result<String> =
@@ -153,5 +224,14 @@ class SessionSwitchCoordinator(private val context: Context) {
     private fun stopAutomationOverlays() {
         WhatsappRegistrationState.reset()
         WhatsappMacroState.reset()
+    }
+
+    private fun isAppInstalled(packageName: String): Boolean {
+        return try {
+            context.packageManager.getPackageInfo(packageName, 0)
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 }

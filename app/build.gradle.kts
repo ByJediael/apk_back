@@ -8,6 +8,20 @@ if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
 }
 
+// Credenciais em local.properties (gitignored) — ver local.properties.example
+fun localOr(key: String, fallback: String): String {
+    val f = rootProject.file("local.properties")
+    if (!f.exists()) return fallback
+    val line = f.readLines()
+        .map { it.trim() }
+        .firstOrNull { it.startsWith("$key=") && !it.startsWith("#") }
+        ?: return fallback
+    val value = line.substringAfter("=").trim()
+    return value.ifBlank { fallback }
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+}
+
 android {
     namespace = "com.folderbackup.agent"
     compileSdk = 35
@@ -16,8 +30,43 @@ android {
         applicationId = "com.folderbackup.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0-register"
+        versionCode = 6
+        versionName = "0.6.0-auto-pair"
+    }
+
+    flavorDimensions += "env"
+
+    productFlavors {
+        create("local") {
+            dimension = "env"
+            // USB: adb reverse → 127.0.0.1 | Wi-Fi: IP do PC
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                "\"${localOr("api.local.url", localOr("api.base.url", "http://127.0.0.1:8080"))}\"",
+            )
+            buildConfigField(
+                "String",
+                "API_TOKEN",
+                "\"${localOr("api.local.token", localOr("api.token", "12345678"))}\"",
+            )
+            buildConfigField("String", "ENV_NAME", "\"local\"")
+        }
+        create("prod") {
+            dimension = "env"
+            // VPS via nginx — APK aponta para /webhook (sem /api no final)
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                "\"${localOr("api.prod.url", "https://n8n.jediael.uk/webhook")}\"",
+            )
+            buildConfigField(
+                "String",
+                "API_TOKEN",
+                "\"${localOr("api.prod.token", localOr("api.token", "12345678"))}\"",
+            )
+            buildConfigField("String", "ENV_NAME", "\"prod\"")
+        }
     }
 
     buildTypes {

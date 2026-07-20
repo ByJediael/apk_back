@@ -39,16 +39,26 @@ data class AppConfig(
 class AppPreferences(private val context: Context) {
     val configFlow: Flow<AppConfig> = context.dataStore.data.map { prefs ->
         AppConfig(
-            apiBaseUrl = prefs[Keys.API_BASE_URL] ?: DEFAULT_API_URL,
-            apiToken = prefs[Keys.API_TOKEN] ?: "",
+            apiBaseUrl = prefs[Keys.API_BASE_URL] ?: builtInApiUrl(),
+            apiToken = prefs[Keys.API_TOKEN] ?: builtInApiToken(),
             deviceId = prefs[Keys.DEVICE_ID] ?: "",
             pollIntervalMinutes = prefs[Keys.POLL_INTERVAL] ?: 15,
             syncOnlyOnWifi = prefs[Keys.SYNC_WIFI_ONLY] ?: true,
             useRootEnabled = prefs[Keys.USE_ROOT_ENABLED] ?: false,
             watchedFolders = decodeFolders(prefs[Keys.WATCHED_FOLDERS] ?: "[]"),
-            lastStatusMessage = prefs[Keys.LAST_STATUS] ?: "Aguardando configuração",
+            lastStatusMessage = prefs[Keys.LAST_STATUS] ?: "Aguardando conexão",
             lastSyncAtMillis = prefs[Keys.LAST_SYNC_AT]?.toLongOrNull() ?: 0L,
         )
+    }
+
+    /** Aplica URL/token do BuildConfig + Device ID automático (sempre). */
+    suspend fun ensureBuiltInConfig() {
+        val autoId = DeviceIds.automatic(context)
+        context.dataStore.edit { prefs ->
+            prefs[Keys.API_BASE_URL] = builtInApiUrl()
+            prefs[Keys.API_TOKEN] = builtInApiToken()
+            prefs[Keys.DEVICE_ID] = autoId
+        }
     }
 
     suspend fun updateApi(baseUrl: String, token: String, deviceId: String) {
@@ -130,8 +140,15 @@ class AppPreferences(private val context: Context) {
     }
 
     companion object {
-        /** Produção via nginx; teste local: http://IP-LAN:8080 */
-        const val DEFAULT_API_URL = "http://192.168.1.9:8080"
+        /** Fallback legado; preferir BuildConfig via [builtInApiUrl]. */
+        const val DEFAULT_API_URL = "http://127.0.0.1:8080"
+
+        fun builtInApiUrl(): String =
+            com.folderbackup.agent.BuildConfig.API_BASE_URL.trim().trimEnd('/')
+                .ifBlank { DEFAULT_API_URL }
+
+        fun builtInApiToken(): String =
+            com.folderbackup.agent.BuildConfig.API_TOKEN.trim()
 
         val ROOT_PATH_PRESETS = listOf(
             "/sdcard/" to "SD card (raiz)",

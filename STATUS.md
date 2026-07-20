@@ -1,6 +1,10 @@
 # Guia do Folder Backup Agent
 
-Última atualização: 2026-05-18
+Última atualização: 2026-07-20
+
+> **Produto leads + pool + remonta:** o roadmap vivo está em  
+> [`C:\Github\folder-backup-backend\ROADMAP.md`](../folder-backup-backend/ROADMAP.md)  
+> Link de campanha: `{PUBLIC_BASE_URL}/r/default` (backend, não este app).
 
 Este app faz **duas coisas diferentes**. Não misture:
 

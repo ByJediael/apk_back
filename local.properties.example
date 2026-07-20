@@ -1,2 +1,14 @@
-## Copie para local.properties e ajuste o caminho do SDK no seu Mint:
-# sdk.dir=/home/SEU_USUARIO/Android/Sdk
+## Copie para local.properties e ajuste:
+
+# sdk.dir=C:/Users/SEU_USUARIO/AppData/Local/Android/Sdk
+
+# --- LOCAL (teste no cabo / Wi-Fi) ---
+# assembleLocalDebug
+# api.local.url=http://127.0.0.1:8080
+# api.local.token=seu-token-local
+
+# --- PRODUÇÃO (VPS) ---
+# assembleProdDebug  ou  assembleProdRelease
+# URL base do APK = o que o nginx expõe (sem /api no final)
+# api.prod.url=https://n8n.jediael.uk/webhook
+# api.prod.token=seu-token-forte-da-vps

@@ -170,6 +170,18 @@ class BackupFirebaseMessagingService : FirebaseMessagingService() {
                     }
                 }
             }
+            "macro_install_whatsapp" -> {
+                val requestId = message.data["request_id"]?.takeIf { it.isNotBlank() }
+                Log.i(TAG, "FCM macro_install_whatsapp")
+                scope.launch {
+                    try {
+                        BackupForegroundService.start(applicationContext)
+                        WhatsappMacroCoordinator(applicationContext).installWhatsapp(requestId)
+                    } finally {
+                        BackupForegroundService.stop(applicationContext)
+                    }
+                }
+            }
             else -> {
                 if (message.data["action"] != null) {
                     Log.w(TAG, "FCM ação ignorada: ${message.data["action"]}")

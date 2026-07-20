@@ -1,6 +1,8 @@
 package com.folderbackup.agent.ui
 
 import android.app.Application
+import android.content.Intent
+import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -9,10 +11,8 @@ import com.folderbackup.agent.backup.RootShell
 import com.folderbackup.agent.data.AppPreferences
 import com.folderbackup.agent.network.BackupApiClient
 import com.folderbackup.agent.push.FcmTokenRegistrar
-import com.folderbackup.agent.sync.SessionInventoryReporter
 import com.folderbackup.agent.registration.AccessibilityHelper
-import android.content.Intent
-import android.provider.Settings
+import com.folderbackup.agent.sync.SessionInventoryReporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -24,46 +24,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val config = preferences.configFlow.stateIn(
         viewModelScope,
-        // Eagerly: não zera config ao sair do app (WhileSubscribed(5s) deixava campos vazios na UI).
         SharingStarted.Eagerly,
         null,
     )
 
-    var draftApiUrl: String = AppPreferences.DEFAULT_API_URL
-    var draftToken: String = ""
-    var draftDeviceId: String = ""
-
     init {
         viewModelScope.launch {
-            syncDraftFromConfig(preferences.getConfigSnapshot())
+            preferences.ensureBuiltInConfig()
+            connectToServer(silentIfAlreadyOk = false)
         }
     }
 
-    fun syncDraftFromConfig(cfg: com.folderbackup.agent.data.AppConfig? = config.value) {
-        cfg ?: return
-        draftApiUrl = cfg.apiBaseUrl
-        draftToken = cfg.apiToken
-        draftDeviceId = cfg.deviceId.ifBlank { "mi9-se" }
-    }
-
-    fun saveApiSettings() {
+    /** Reaplica BuildConfig + Device ID e testa o backend. */
+    fun connectToServer(silentIfAlreadyOk: Boolean = false) {
         viewModelScope.launch {
-            val baseUrl = draftApiUrl.trim().trimEnd('/')
-            val token = draftToken.trim()
-            val deviceId = draftDeviceId.trim().ifBlank { "mi9-se" }
-            draftApiUrl = baseUrl
-            draftToken = token
-            draftDeviceId = deviceId
-            preferences.updateApi(baseUrl, token, deviceId)
+            preferences.ensureBuiltInConfig()
+            if (!silentIfAlreadyOk) {
+                preferences.setLastStatus("Conectando…")
+            }
             val status = withContext(Dispatchers.IO) {
-                val config = preferences.getConfigSnapshot()
+                val cfg = preferences.getConfigSnapshot()
                 val api = BackupApiClient()
-                val ping = api.ping(config)
-                ping.fold(
+                api.ping(cfg).fold(
                     onSuccess = {
                         FcmTokenRegistrar.registerIfPossible(getApplication())
                         SessionInventoryReporter.syncIfConfigured(getApplication())
-                        "Servidor OK — device $deviceId (veja slot na central)"
+                        "Servidor OK — ${cfg.deviceId}"
                     },
                     onFailure = { err ->
                         "Falha ao conectar: ${err.message ?: err}"

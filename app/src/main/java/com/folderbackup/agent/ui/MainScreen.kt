@@ -14,14 +14,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,11 +29,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.folderbackup.agent.BuildConfig
 import com.folderbackup.agent.R
 import com.folderbackup.agent.registration.AccessibilityHelper
 import com.folderbackup.agent.registration.WhatsappAutomationController
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.folderbackup.agent.data.AppPreferences
 import java.text.DateFormat
 import java.util.Date
 
@@ -45,18 +43,6 @@ fun MainScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
     val config by viewModel.config.collectAsStateWithLifecycle()
     var a11yEnabled by remember { mutableStateOf(AccessibilityHelper.isServiceEnabled(context)) }
-
-    var apiUrl by remember { mutableStateOf(AppPreferences.DEFAULT_API_URL) }
-    var token by remember { mutableStateOf("") }
-    var deviceId by remember { mutableStateOf("") }
-
-    LaunchedEffect(config) {
-        val cfg = config ?: return@LaunchedEffect
-        viewModel.syncDraftFromConfig(cfg)
-        apiUrl = viewModel.draftApiUrl
-        token = viewModel.draftToken
-        deviceId = viewModel.draftDeviceId
-    }
 
     val cardColors = CardDefaults.cardColors(
         containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -83,7 +69,7 @@ fun MainScreen(viewModel: MainViewModel) {
         ) {
             item {
                 Text(
-                    "Agente remoto — configure uma vez. Limpar, backup e restaurar vêm pela API.",
+                    "Agente pessoal — ligue a acessibilidade uma vez. Pairing Evolution chega sozinho (fila).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -92,54 +78,32 @@ fun MainScreen(viewModel: MainViewModel) {
             item {
                 Card(modifier = Modifier.fillMaxWidth(), colors = cardColors) {
                     Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Conexão", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "Servidor (FCM)",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = apiUrl,
-                            onValueChange = {
-                                apiUrl = it
-                                viewModel.draftApiUrl = it
+                            "Ambiente: ${BuildConfig.ENV_NAME}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (BuildConfig.ENV_NAME == "prod") {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
                             },
-                            label = { Text("URL base") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
                         )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = token,
-                            onValueChange = {
-                                token = it
-                                viewModel.draftToken = it
-                            },
-                            label = { Text("Token Bearer") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
+                        Text(
+                            "API: ${BuildConfig.API_BASE_URL}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = deviceId,
-                            onValueChange = {
-                                deviceId = it
-                                viewModel.draftDeviceId = it
-                            },
-                            label = { Text("Device ID") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
+                        Text(
+                            "Device: ${config?.deviceId?.ifBlank { "…" } ?: "…"}",
+                            style = MaterialTheme.typography.bodySmall,
                         )
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Button(
-                            onClick = {
-                                viewModel.draftApiUrl = apiUrl
-                                viewModel.draftToken = token
-                                viewModel.draftDeviceId = deviceId
-                                viewModel.saveApiSettings()
-                            },
+                            onClick = { viewModel.connectToServer() },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Salvar")
+                            Text("Conectar / testar")
                         }
                     }
                 }
@@ -159,7 +123,7 @@ fun MainScreen(viewModel: MainViewModel) {
                                 onCheckedChange = viewModel::setUseRootEnabled,
                             )
                         }
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = viewModel::testRootAccess,
                             modifier = Modifier.fillMaxWidth(),
@@ -174,13 +138,13 @@ fun MainScreen(viewModel: MainViewModel) {
                 Card(modifier = Modifier.fillMaxWidth(), colors = cardColors) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Montagem automática", style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             stringResource(R.string.accessibility_enable_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             if (a11yEnabled) "Acessibilidade: ativa" else "Acessibilidade: desativada",
                             color = if (a11yEnabled) {
@@ -189,13 +153,13 @@ fun MainScreen(viewModel: MainViewModel) {
                                 MaterialTheme.colorScheme.error
                             },
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             stringResource(R.string.register_manual_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = {
                                 viewModel.openAccessibilitySettings()
@@ -205,7 +169,7 @@ fun MainScreen(viewModel: MainViewModel) {
                         ) {
                             Text("Abrir configurações de acessibilidade")
                         }
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = {
                                 WhatsappAutomationController.cancelAutomation(context)
@@ -223,19 +187,13 @@ fun MainScreen(viewModel: MainViewModel) {
                 Card(modifier = Modifier.fillMaxWidth(), colors = cardColors) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Status", style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(4.dp))
-                        Text(config?.lastStatusMessage ?: "Aguardando configuração…")
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(config?.lastStatusMessage ?: "Aguardando…")
                         val last = config?.lastSyncAtMillis ?: 0L
                         if (last > 0L) {
                             val formatted = DateFormat.getDateTimeInstance().format(Date(last))
                             Text(
                                 "Última atividade: $formatted",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        config?.deviceId?.takeIf { it.isNotBlank() }?.let { id ->
-                            Text(
-                                "Device: $id",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }

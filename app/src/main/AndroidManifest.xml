@@ -41,6 +41,14 @@
             </intent-filter>
         </service>
 
+        <receiver
+            android:name=".push.DebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.folderbackup.agent.ACTION_DEBUG_COMMAND" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".registration.WhatsappRegistrationAccessibilityService"
             android:exported="false"
