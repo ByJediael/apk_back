@@ -1,6 +1,7 @@
 package com.folderbackup.agent.push
 
 import android.util.Log
+import com.folderbackup.agent.registration.WhatsappLinkDeviceState
 import com.folderbackup.agent.service.BackupForegroundService
 import com.folderbackup.agent.sync.SessionSwitchCoordinator
 import com.folderbackup.agent.sync.WhatsappMacroCoordinator
@@ -119,6 +120,37 @@ class BackupFirebaseMessagingService : FirebaseMessagingService() {
                     try {
                         BackupForegroundService.start(applicationContext)
                         WhatsappMacroCoordinator(applicationContext).goHome(requestId)
+                    } finally {
+                        BackupForegroundService.stop(applicationContext)
+                    }
+                }
+            }
+            "macro_finish_link_device" -> {
+                val requestId = message.data["request_id"]?.takeIf { it.isNotBlank() }
+                val deviceName = message.data["display_name"]?.trim()?.takeIf { it.isNotBlank() }
+                    ?: WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME
+                val evoInstance = message.data["evolution_instance"]?.trim()?.takeIf { it.isNotBlank() }
+                Log.i(TAG, "FCM macro_finish_link_device")
+                scope.launch {
+                    try {
+                        BackupForegroundService.start(applicationContext)
+                        WhatsappMountCoordinator(applicationContext).finishLinkedDeviceSetup(
+                            requestId = requestId,
+                            deviceName = deviceName,
+                            evolutionInstance = evoInstance,
+                        )
+                    } finally {
+                        BackupForegroundService.stop(applicationContext)
+                    }
+                }
+            }
+            "macro_force_stop_whatsapp" -> {
+                val requestId = message.data["request_id"]?.takeIf { it.isNotBlank() }
+                Log.i(TAG, "FCM macro_force_stop_whatsapp")
+                scope.launch {
+                    try {
+                        BackupForegroundService.start(applicationContext)
+                        WhatsappMacroCoordinator(applicationContext).forceStopWhatsapp(requestId)
                     } finally {
                         BackupForegroundService.stop(applicationContext)
                     }

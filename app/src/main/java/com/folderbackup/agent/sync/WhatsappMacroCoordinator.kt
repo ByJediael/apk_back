@@ -1,9 +1,11 @@
 package com.folderbackup.agent.sync
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import com.folderbackup.agent.backup.RootShell
 import com.folderbackup.agent.backup.WhatsappSessionExporter
 import com.folderbackup.agent.data.AppPreferences
 import com.folderbackup.agent.network.BackupApiClient
@@ -46,6 +48,93 @@ class WhatsappMacroCoordinator(private val context: Context) {
         Result.success(msg)
     }
 
+    suspend fun forceStopWhatsapp(requestId: String?): Result<String> = withContext(Dispatchers.IO) {
+        report(requestId, "macro_force_stop_whatsapp", "running", "Fechando WhatsApp (apps recentes + force-stop)…")
+
+        val pkg = WhatsappSessionExporter.WHATSAPP_PACKAGE
+        WhatsappRegistrationAccessibilityService.pressHome()
+        delay(500)
+
+        if (AccessibilityHelper.isServiceEnabled(context)) {
+            report(requestId, "macro_force_stop_whatsapp", "running", "Lista de apps → fechar WhatsApp (X ou arrastar)…")
+            repeat(RECENTS_DISMISS_ATTEMPTS) {
+                WhatsappRegistrationAccessibilityService.dismissWhatsappFromRecents()
+                delay(800)
+            }
+        }
+
+        val killScript = """
+            am force-stop $pkg
+            killall $pkg 2>/dev/null || true
+            am force-stop $pkg
+        """.trimIndent()
+
+        if (RootShell.isRootAvailable()) {
+            RootShell.runSu(killScript)
+        }
+        runShellForceStop(pkg)
+
+        var verified = false
+        repeat(FORCE_STOP_ATTEMPTS) { attempt ->
+            if (!isWhatsappProcessRunning(pkg)) {
+                verified = true
+                return@repeat
+            }
+            Log.w(TAG, "WA ainda rodando — tentativa ${attempt + 1}/$FORCE_STOP_ATTEMPTS")
+            if (RootShell.isRootAvailable()) {
+                RootShell.runSu(killScript)
+            }
+            runShellForceStop(pkg)
+            delay(FORCE_STOP_RETRY_MS)
+        }
+
+        delay(800)
+        val stillRunning = isWhatsappProcessRunning(pkg)
+        if (stillRunning) {
+            val msg = "WhatsApp ainda em segundo plano após force-stop"
+            report(requestId, "macro_force_stop_whatsapp", "failed", msg)
+            preferences.setLastStatus(msg)
+            return@withContext Result.failure(IllegalStateException(msg))
+        }
+
+        WhatsappRegistrationAccessibilityService.pressHome()
+        val msg = if (verified) {
+            "WhatsApp fechado por completo (recentes + force-stop)"
+        } else {
+            "WhatsApp fechado (recentes + force-stop)"
+        }
+        report(requestId, "macro_force_stop_whatsapp", "completed", msg)
+        preferences.setLastStatus(msg)
+        RegistrationNotifier.show(context, "Macro", msg)
+        Result.success(msg)
+    }
+
+    private fun runShellForceStop(pkg: String) {
+        try {
+            Runtime.getRuntime().exec(arrayOf("sh", "-c", "am force-stop $pkg")).waitFor()
+        } catch (e: Exception) {
+            Log.w(TAG, "am force-stop shell: ${e.message}")
+        }
+    }
+
+    private fun isWhatsappProcessRunning(pkg: String): Boolean {
+        if (RootShell.isRootAvailable()) {
+            val pid = RootShell.runSu("pidof $pkg 2>/dev/null").getOrNull().orEmpty().trim()
+            if (pid.isNotBlank()) return true
+            return false
+        }
+        return try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            @Suppress("DEPRECATION")
+            am.runningAppProcesses?.any { proc ->
+                proc.processName == pkg || proc.pkgList?.contains(pkg) == true
+            } == true
+        } catch (e: Exception) {
+            Log.w(TAG, "isWhatsappProcessRunning: ${e.message}")
+            false
+        }
+    }
+
     suspend fun openWhatsapp(requestId: String?): Result<String> = withContext(Dispatchers.IO) {
         if (!AccessibilityHelper.isServiceEnabled(context)) {
             val msg = "Ative Acessibilidade → WhatsApp Backup"
@@ -64,10 +153,29 @@ class WhatsappMacroCoordinator(private val context: Context) {
             return@withContext Result.failure(IllegalStateException(msg))
         }
 
+        delay(2000)
+        report(requestId, "macro_open_whatsapp", "running", "Aguardando tela inicial (conversas)…")
+        var onHome = false
+        repeat(HOME_WAIT_ATTEMPTS) {
+            WhatsappRegistrationAccessibilityService.ensureWhatsappChatHome()
+            if (WhatsappRegistrationAccessibilityService.isSafeForPairingCodeFetch()) {
+                onHome = true
+                return@repeat
+            }
+            delay(HOME_WAIT_MS)
+        }
+
+        if (!onHome && !WhatsappRegistrationAccessibilityService.isSafeForPairingCodeFetch()) {
+            val msg = "WhatsApp aberto mas ainda em tela de pairing/menu"
+            report(requestId, "macro_open_whatsapp", "failed", msg)
+            return@withContext Result.failure(IllegalStateException(msg))
+        }
+
         val status = if (open.method == "intent") "completed_with_fallback" else "completed"
-        val msg = when (open.method) {
-            "intent" -> "WhatsApp aberto (intent)"
-            else -> "WhatsApp aberto pelo ícone"
+        val msg = if (WhatsappRegistrationAccessibilityService.isOnWhatsappChatHome()) {
+            "WhatsApp na tela inicial (conversas)"
+        } else {
+            "WhatsApp aberto — fora do menu de dispositivos"
         }
         report(requestId, "macro_open_whatsapp", status, msg)
         preferences.setLastStatus(msg)
@@ -172,5 +280,10 @@ class WhatsappMacroCoordinator(private val context: Context) {
 
     companion object {
         private const val TAG = "WaMacroCoordinator"
+        private const val FORCE_STOP_ATTEMPTS = 5
+        private const val FORCE_STOP_RETRY_MS = 900L
+        private const val RECENTS_DISMISS_ATTEMPTS = 4
+        private const val HOME_WAIT_ATTEMPTS = 10
+        private const val HOME_WAIT_MS = 800L
     }
 }

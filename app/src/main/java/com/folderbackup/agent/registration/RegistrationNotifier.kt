@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.folderbackup.agent.FolderBackupApplication
 import com.folderbackup.agent.MainActivity
@@ -14,8 +16,14 @@ import com.folderbackup.agent.R
 object RegistrationNotifier {
     private const val CHANNEL_ID = "wa_registration"
     private const val NOTIF_ID = 2001
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun show(context: Context, title: String, message: String) {
+        val appContext = context.applicationContext
+        mainHandler.post { showOnMain(appContext, title, message) }
+    }
+
+    private fun showOnMain(context: Context, title: String, message: String) {
         ensureChannel(context)
         val intent = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val pending = PendingIntent.getActivity(

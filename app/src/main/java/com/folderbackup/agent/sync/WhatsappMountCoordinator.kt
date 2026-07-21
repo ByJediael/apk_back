@@ -8,11 +8,9 @@ import com.folderbackup.agent.registration.AccessibilityHelper
 import com.folderbackup.agent.registration.RegistrationNotifier
 import com.folderbackup.agent.registration.WhatsappLinkDeviceState
 import com.folderbackup.agent.registration.WhatsappRegistrationAccessibilityService
-import com.folderbackup.agent.registration.WhatsappRegistrationState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 class WhatsappMountCoordinator(private val context: Context) {
     private val linkCoordinator = WhatsappLinkDeviceCoordinator(context)
@@ -23,67 +21,38 @@ class WhatsappMountCoordinator(private val context: Context) {
         requestId: String?,
         pairingCode: String,
         evolutionInstance: String?,
-    ): Result<String> = withContext(Dispatchers.IO) {
-        if (!AccessibilityHelper.isServiceEnabled(context)) {
-            val msg = "Ative Acessibilidade → WhatsApp Backup"
-            report(requestId, "submit_pairing_code", "failed", msg, evolutionInstance)
-            return@withContext Result.failure(IllegalStateException(msg))
-        }
+    ): Result<String> = linkCoordinator.enterPairingCode(requestId, pairingCode, evolutionInstance)
 
-        val code = pairingCode.replace(Regex("[^A-Za-z0-9]"), "").uppercase()
-        if (code.length < 8) {
-            return@withContext Result.failure(IllegalStateException("pairing_code inválido (precisa 8 caracteres)"))
-        }
+    suspend fun confirmScamWarningAndFinish(
+        requestId: String?,
+        deviceName: String,
+        evolutionInstance: String?,
+    ): Result<String> = linkCoordinator.confirmScamWarningAndFinish(requestId, deviceName, evolutionInstance)
 
-        report(requestId, "submit_pairing_code", "running", "Digitando código $code…", evolutionInstance)
-        RegistrationNotifier.show(context, "Evolution", "Código: $code")
-
-        if (!WhatsappRegistrationAccessibilityService.isOnEnterCodeScreen() &&
-            WhatsappLinkDeviceState.step != WhatsappLinkDeviceState.Step.ReadyForCode
-        ) {
-            val nav = navigateMenuOnly(requestId)
-            if (nav.isFailure) return@withContext nav
-        }
-
-        linkCoordinator.enterPairingCode(requestId, code, evolutionInstance)
-    }
+    suspend fun finishLinkedDeviceSetup(
+        requestId: String?,
+        deviceName: String,
+        evolutionInstance: String?,
+    ): Result<String> = linkCoordinator.finishLinkedDeviceSetup(requestId, deviceName, evolutionInstance)
 
     suspend fun navigateToLinkWithPhone(requestId: String?): Result<String> =
         linkCoordinator.navigateToLinkWithPhone(requestId)
 
-    private suspend fun navigateMenuOnly(requestId: String?): Result<String> {
-        WhatsappRegistrationState.reset()
-        WhatsappLinkDeviceState.reset()
+    suspend fun navigateToLinkFromHome(requestId: String?): Result<String> =
+        linkCoordinator.navigateToLinkFromHome(requestId)
 
-        if (!WhatsappRegistrationAccessibilityService.pressHome()) {
-            return Result.failure(IllegalStateException("HOME falhou"))
-        }
-        delay(800)
-
-        val open = WhatsappOpenHelper.open(context)
-        if (!open.ok) {
-            return Result.failure(IllegalStateException("Não foi possível abrir WhatsApp"))
-        }
-        delay(1500)
-
-        WhatsappLinkDeviceState.beginNavigation()
-        val navigated = withTimeoutOrNull(NAV_TIMEOUT_MS) {
-            while (true) {
-                WhatsappRegistrationAccessibilityService.runLinkDeviceStep()
-                when (WhatsappLinkDeviceState.step) {
-                    WhatsappLinkDeviceState.Step.ReadyForCode,
-                    WhatsappLinkDeviceState.Step.Done,
-                    -> return@withTimeoutOrNull true
-                    WhatsappLinkDeviceState.Step.Failed -> return@withTimeoutOrNull false
-                    else -> delay(1200)
-                }
+    private suspend fun waitForA11y(requestId: String?, evolutionInstance: String?): Boolean {
+        repeat(A11Y_WAIT_ATTEMPTS) {
+            if (AccessibilityHelper.isServiceEnabled(context) &&
+                AccessibilityHelper.isServiceConnected()
+            ) {
+                return true
             }
+            delay(A11Y_WAIT_MS)
         }
-        if (navigated != true) {
-            WhatsappLinkDeviceState.reset()
-            return Result.failure(IllegalStateException("Timeout na navegação do menu"))
-        }
-        return Result.success("Menu pronto")
+        val msg = "Ative Acessibilidade → WhatsApp Backup"
+        report(requestId, "submit_pairing_code", "failed", msg, evolutionInstance)
+        return false
     }
 
     private suspend fun report(
@@ -108,6 +77,7 @@ class WhatsappMountCoordinator(private val context: Context) {
 
     companion object {
         private const val TAG = "WaMountCoordinator"
-        private const val NAV_TIMEOUT_MS = 90_000L
+        private const val A11Y_WAIT_MS = 1_000L
+        private const val A11Y_WAIT_ATTEMPTS = 20
     }
 }
