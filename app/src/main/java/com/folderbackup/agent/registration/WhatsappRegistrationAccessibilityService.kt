@@ -581,6 +581,10 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
                 }
             }
             WhatsappLinkDeviceState.Step.TapLinkWithPhone -> {
+                if (isOnEnterCodeScreen()) {
+                    WhatsappLinkDeviceState.advanceFrom(WhatsappLinkDeviceState.Step.TapLinkWithPhone)
+                    return true
+                }
                 val texts = listOf(
                     "CONECTAR COM NÚMERO DE TELEFONE",
                     "CONECTAR COM NÚMERO",
@@ -1199,6 +1203,10 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             "WA Business",
             "WhatsApp Business",
             "WABusiness",
+            "WhatsApp Negocios",
+            "Negocios",
+            "Negócios",
+            "Business",
         )
         for (label in labels) {
             val nodes = root.findAccessibilityNodeInfosByText(label)
@@ -1237,6 +1245,8 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         val haystack = "$desc $text"
         if (haystack.contains("backup", ignoreCase = true)) return null
         if (haystack.contains("business", ignoreCase = true) ||
+            haystack.contains("negocios", ignoreCase = true) ||
+            haystack.contains("negócios", ignoreCase = true) ||
             haystack.equals("WABusiness", ignoreCase = true) ||
             haystack.equals("WA Business", ignoreCase = true)
         ) {
@@ -1255,7 +1265,10 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             pkg == "com.miui.home" ||
             pkg == "com.mi.android.globallauncher" ||
             pkg == "com.sec.android.app.launcher" ||
-            pkg == "com.google.android.apps.nexuslauncher"
+            pkg == "com.google.android.apps.nexuslauncher" ||
+            pkg == "com.motorola.launcher3" ||
+            pkg == "com.motorola.launcher" ||
+            pkg == "com.android.launcher3"
     }
 
     private fun isAppInstalled(packageName: String): Boolean {
@@ -1345,6 +1358,12 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
 
     private fun closeWhatsappRecentCard(root: AccessibilityNodeInfo): Boolean {
         val cardRect = findWhatsappRecentCardRect(root) ?: return false
+        // Motorola / Android 15: dismiss = arrastar card para cima.
+        if (swipeUpFromRect(cardRect)) {
+            Log.i(TAG, "Recents: arrastou card WA para cima $cardRect")
+            Thread.sleep(500)
+            return true
+        }
         if (clickCloseButtonOnRecentCard(root, cardRect)) {
             Log.i(TAG, "Recents: botão X/fechar no card WA $cardRect")
             Thread.sleep(500)
@@ -1353,10 +1372,6 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         if (swipeLeftFromRect(cardRect)) {
             Log.i(TAG, "Recents: arrastou card WA para o lado $cardRect")
             Thread.sleep(500)
-            return true
-        }
-        if (swipeUpFromRect(cardRect)) {
-            Log.i(TAG, "Recents: arrastou card WA para cima $cardRect")
             return true
         }
         return false
@@ -1393,31 +1408,62 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
 
     private fun swipeDismissRecentsCard(): Boolean {
         val metrics = resources.displayMetrics
-        val rect = Rect(
-            (metrics.widthPixels * 0.08f).toInt(),
-            (metrics.heightPixels * 0.35f).toInt(),
-            (metrics.widthPixels * 0.92f).toInt(),
-            (metrics.heightPixels * 0.72f).toInt(),
+        val w = metrics.widthPixels.toFloat()
+        val h = metrics.heightPixels.toFloat()
+        // Gesto forte para cima (Motorola gesture nav / launcher3).
+        return try {
+            val path = Path().apply {
+                moveTo(w * 0.5f, h * 0.72f)
+                lineTo(w * 0.5f, h * 0.08f)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 380))
+                .build()
+            Log.i(TAG, "Recents: swipe genérico para cima (centro)")
+            dispatchGesture(gesture, null, null)
+            Thread.sleep(500)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "swipeDismissRecentsCard: ${e.message}")
+            false
+        }
+    }
+
+    private fun clickClearAllRecents(root: AccessibilityNodeInfo): Boolean {
+        val labels = listOf(
+            "LIMPAR TUDO",
+            "LIMPAR TODOS",
+            "CERRAR TODO",
+            "CERRAR TODOS",
+            "CLEAR ALL",
+            "CLOSE ALL",
+            "BORRAR TODO",
         )
-        Log.i(TAG, "Recents: swipe genérico no card central")
-        return swipeUpFromRect(rect)
+        for (label in labels) {
+            if (clickByText(root, label, partial = true)) {
+                Log.i(TAG, "Recents: clicou $label")
+                return true
+            }
+        }
+        return false
     }
 
     private fun swipeUpFromRect(rect: Rect): Boolean {
         return try {
             val cx = rect.centerX().toFloat()
-            val yStart = (rect.top + rect.height() * 0.75f)
-                .coerceAtMost(resources.displayMetrics.heightPixels * 0.85f)
-            val yEnd = (rect.top - rect.height() * 0.5f).coerceAtLeast(0f)
+            val h = resources.displayMetrics.heightPixels.toFloat()
+            val yStart = (rect.top + rect.height() * 0.7f).coerceAtMost(h * 0.88f)
+            // Vai quase até o topo da tela — no Moto o card precisa sair por cima.
+            val yEnd = (h * 0.05f).coerceAtMost(yStart - 200f)
             val path = Path().apply {
                 moveTo(cx, yStart)
                 lineTo(cx, yEnd)
             }
             val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 320))
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 380))
                 .build()
             dispatchGesture(gesture, null, null)
-            Thread.sleep(450)
+            Thread.sleep(500)
             true
         } catch (e: Exception) {
             Log.w(TAG, "swipeUpFromRect: ${e.message}")
@@ -1445,6 +1491,12 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             "NOME DO DISPOSITIVO", "NOME DE DISPOSITIVO", "DEVICE NAME",
             "NOMBRE DEL DISPOSITIVO", "NOMBRE DE DISPOSITIVO",
         )
+        private val QR_LINK_HINTS = listOf(
+            "ESCANEAR CÓDIGO QR", "ESCANEAR CODIGO QR", "ESCANEAR QR",
+            "SCAN QR CODE", "SCAN THE QR", "QR CODE", "CÓDIGO QR", "CODIGO QR",
+            "APUNTA EL TELÉFONO", "APUNTA EL TELEFONO", "APONTAR O TELEFONE",
+            "SCANNEZ", "ABRE WHATSAPP EN TU TELÉFONO",
+        )
 
         @Volatile
         var instance: WhatsappRegistrationAccessibilityService? = null
@@ -1452,6 +1504,42 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         fun pressHome(): Boolean {
             val service = instance ?: return false
             return service.performGlobalAction(GLOBAL_ACTION_HOME)
+        }
+
+        /**
+         * HOME → clica o ícone do WhatsApp Business no launcher.
+         * Fallback quando startActivity é bloqueado em background.
+         */
+        fun openWhatsappFromLauncher(): Boolean {
+            val service = instance ?: return false
+            pressHome()
+            Thread.sleep(700)
+            repeat(4) { attempt ->
+                val root = service.rootInActiveWindow
+                if (root != null && service.clickWhatsappIcon(root)) {
+                    Log.i(TAG, "openWhatsappFromLauncher: ícone clicado (tentativa ${attempt + 1})")
+                    Thread.sleep(1200)
+                    if (service.whatsappRoot() != null) return true
+                    // Clique pode ter aberto; pacote ainda carregando.
+                    Thread.sleep(1500)
+                    return true
+                }
+                // Arrasta a home para achar o ícone em outra página.
+                try {
+                    val dm = service.resources.displayMetrics
+                    val midY = dm.heightPixels * 0.55f
+                    val path = Path().apply {
+                        moveTo(dm.widthPixels * 0.85f, midY)
+                        lineTo(dm.widthPixels * 0.15f, midY)
+                    }
+                    val stroke = GestureDescription.StrokeDescription(path, 0, 280)
+                    service.dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+                } catch (e: Exception) {
+                    Log.w(TAG, "openWhatsappFromLauncher swipe: ${e.message}")
+                }
+                Thread.sleep(600)
+            }
+            return false
         }
 
         fun pressBack(): Boolean {
@@ -1481,8 +1569,15 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
                         pressHome()
                         return true
                     }
+                    if (service.clickClearAllRecents(root)) {
+                        Thread.sleep(700)
+                        pressHome()
+                        return true
+                    }
                     if (service.swipeDismissRecentsCard()) {
                         Thread.sleep(700)
+                        // Segunda passada: Limpar tudo, se ainda houver.
+                        service.rootInActiveWindow?.let { service.clickClearAllRecents(it) }
                         pressHome()
                         return true
                     }
@@ -1653,21 +1748,45 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
             val service = instance ?: return false
             val root = service.whatsappRoot() ?: return false
             if (service.findPairingCodeEdits(root).size >= 4) return false
+            if (isOnQrLinkScreen()) return false
             val hasWarning = service.treeContainsAny(root, SCAM_WARNING_HINTS) ||
                 service.treeContainsAny(root, SCAM_COUNTRY_HINTS)
+            if (!hasWarning) return false
             val hasConnect = service.treeContainsAny(root, SCAM_CONNECT_HINTS)
-            if (hasWarning && hasConnect) return true
-            if (hasWarning && service.treeContainsAny(
-                    root,
-                    listOf("OK", "ENTENDI", "ENTENDIDO", "ACEPTAR", "GOT IT", "ACEITO"),
-                )
-            ) return true
-            return hasConnect
+            val hasOk = service.treeContainsAny(
+                root,
+                listOf("OK", "ENTENDI", "ENTENDIDO", "ACEPTAR", "GOT IT", "ACEITO", "ENTENDIDO"),
+            )
+            // Só anti-golpe se houver alerta + (Conectar ou OK). Nunca só "Conectar"
+            // (a tela de QR também tem "Vincular dispositivo").
+            return hasConnect || hasOk
+        }
+
+        /** Tela de escanear QR (caminho errado — queremos código por telefone). */
+        fun isOnQrLinkScreen(): Boolean {
+            val service = instance ?: return false
+            val root = service.whatsappRoot() ?: return false
+            if (service.findPairingCodeEdits(root).size >= 4) return false
+            if (service.treeContainsAny(root, QR_LINK_HINTS)) return true
+            // QR costuma mostrar o canvas/imagem e o texto de vincular com número embaixo.
+            val hasLinkPhone = service.treeContainsAny(
+                root,
+                listOf(
+                    "NÚMERO DE TELÉFONO", "NUMERO DE TELEFONO", "PHONE NUMBER",
+                    "NÚMERO DE TELEFONE", "NUMERO DE TELEFONE",
+                ),
+            )
+            val hasScanVerb = service.treeContainsAny(
+                root,
+                listOf("ESCANEAR", "SCAN", "APUNT", "APONTAR"),
+            )
+            return hasScanVerb && hasLinkPhone
         }
 
         /** Clica OK ou Conectar o mais rápido possível — número internacional (CO→BR). */
         fun confirmScamWarningFast(): Boolean {
             val service = instance ?: return false
+            if (isOnQrLinkScreen()) return false
             val root = service.whatsappRoot() ?: return false
             if (isOnNameDeviceScreen()) {
                 WhatsappLinkDeviceState.beginNameDevice(
@@ -1675,6 +1794,7 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
                 )
                 return true
             }
+            if (!isOnScamWarningScreen()) return false
             if (service.treeContainsAny(root, SCAM_WARNING_HINTS) ||
                 service.treeContainsAny(root, SCAM_COUNTRY_HINTS)
             ) {
@@ -1687,11 +1807,11 @@ class WhatsappRegistrationAccessibilityService : AccessibilityService() {
         fun isOnNameDeviceScreen(): Boolean {
             val service = instance ?: return false
             val root = service.whatsappRoot() ?: return false
-            if (service.findDeviceNameEdit(root) != null) return true
+            if (isOnQrLinkScreen()) return false
             if (service.findPairingCodeEdits(root).size >= 4) return false
-            if (service.treeContainsAny(root, NAME_DEVICE_HINTS)) return true
-            val edit = service.findFirstEditText(root) ?: return false
-            return edit.isEditable && !service.treeContainsAny(root, SCAM_WARNING_HINTS)
+            if (service.findDeviceNameEdit(root) != null) return true
+            // Exige hint de nome — evita falso positivo em qualquer EditText.
+            return service.treeContainsAny(root, NAME_DEVICE_HINTS)
         }
 
         /** Voltou ao chat principal ou lista de dispositivos — pairing concluído. */

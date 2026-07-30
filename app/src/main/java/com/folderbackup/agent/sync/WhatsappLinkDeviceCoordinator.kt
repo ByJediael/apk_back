@@ -134,7 +134,6 @@ class WhatsappLinkDeviceCoordinator(private val context: Context) {
 
         WhatsappLinkDeviceState.deviceName = WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME
         var skipEnterCode = false
-        var skipScamWarning = false
 
         when {
             WhatsappRegistrationAccessibilityService.isOnEnterCodeScreen() -> {
@@ -152,7 +151,16 @@ class WhatsappLinkDeviceCoordinator(private val context: Context) {
                 WhatsappRegistrationState.markPairingDone()
                 WhatsappLinkDeviceState.beginNameDevice(WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME)
                 skipEnterCode = true
-                skipScamWarning = true
+            }
+            WhatsappRegistrationAccessibilityService.isPairingFlowComplete() -> {
+                report(requestId, "submit_pairing_code", "running", "Já vinculado", evolutionInstance)
+                WhatsappRegistrationState.markPairingDone()
+                WhatsappLinkDeviceState.markDone()
+                skipEnterCode = true
+            }
+            WhatsappRegistrationAccessibilityService.isOnQrLinkScreen() -> {
+                failPairing(requestId, "Tela de QR — use Vincular com número de telefone", evolutionInstance)
+                return@withContext Result.failure(IllegalStateException("QR"))
             }
             else -> {
                 failPairing(requestId, "Tela desconhecida após espera — abra Insira o código", evolutionInstance)
@@ -204,49 +212,154 @@ class WhatsappLinkDeviceCoordinator(private val context: Context) {
         }
 
         syncStepFromScreen()
-        skipScamWarning = skipScamWarning ||
-            WhatsappLinkDeviceState.step == WhatsappLinkDeviceState.Step.NameLinkedDevice ||
-            WhatsappRegistrationAccessibilityService.isOnNameDeviceScreen()
+        if (WhatsappRegistrationAccessibilityService.isOnQrLinkScreen()) {
+            failPairing(
+                requestId,
+                "Tela de QR aberta — precisa Vincular com número (código), não QR",
+                evolutionInstance,
+            )
+            return@withContext Result.failure(IllegalStateException("QR em vez de código"))
+        }
 
-        if (!skipScamWarning) {
+        // Anti-golpe é opcional: só trata se a tela aparecer.
+        val onScam = WhatsappRegistrationAccessibilityService.isOnScamWarningScreen()
+        val onName = WhatsappRegistrationAccessibilityService.isOnNameDeviceScreen()
+        val alreadyDone = WhatsappRegistrationAccessibilityService.isPairingFlowComplete() ||
+            WhatsappLinkDeviceState.step == WhatsappLinkDeviceState.Step.Done
+
+        if (onScam && !onName && !alreadyDone) {
             WhatsappLinkDeviceState.step = WhatsappLinkDeviceState.Step.ConfirmScamWarning
             WhatsappRegistrationState.markPairingDone()
             report(requestId, "submit_pairing_code", "running", "Confirmando anti-golpe…", evolutionInstance)
             burstConfirmScamWarning()
             if (!runScamWarningLoop(requestId, evolutionInstance)) {
                 syncStepFromScreen()
-                if (!WhatsappRegistrationAccessibilityService.isOnNameDeviceScreen()) {
-                    failPairing(requestId, "Timeout na tela anti-golpe — Conectar dispositivo", evolutionInstance)
-                    return@withContext Result.failure(IllegalStateException("Timeout tela anti-golpe"))
+                when {
+                    WhatsappRegistrationAccessibilityService.isOnQrLinkScreen() -> {
+                        failPairing(requestId, "Caiu no QR após o código — force_new", evolutionInstance)
+                        return@withContext Result.failure(IllegalStateException("QR após código"))
+                    }
+                    WhatsappRegistrationAccessibilityService.isOnNameDeviceScreen() ||
+                        WhatsappRegistrationAccessibilityService.isPairingFlowComplete() -> Unit
+                    else -> {
+                        failPairing(requestId, "Timeout na tela anti-golpe — Conectar dispositivo", evolutionInstance)
+                        return@withContext Result.failure(IllegalStateException("Timeout tela anti-golpe"))
+                    }
                 }
             }
+        } else if (!onScam) {
+            report(
+                requestId,
+                "submit_pairing_code",
+                "running",
+                "Sem tela anti-golpe — seguindo",
+                evolutionInstance,
+            )
         }
 
         delay(500)
         syncStepFromScreen()
-        if (WhatsappLinkDeviceState.step != WhatsappLinkDeviceState.Step.NameLinkedDevice &&
-            WhatsappRegistrationAccessibilityService.isOnNameDeviceScreen()
-        ) {
-            WhatsappLinkDeviceState.beginNameDevice(WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME)
-        } else if (WhatsappLinkDeviceState.step != WhatsappLinkDeviceState.Step.NameLinkedDevice &&
-            WhatsappLinkDeviceState.step != WhatsappLinkDeviceState.Step.Done
-        ) {
-            WhatsappLinkDeviceState.beginNameDevice(WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME)
+
+        if (WhatsappRegistrationAccessibilityService.isOnQrLinkScreen()) {
+            failPairing(requestId, "Tela de QR após pairing — force_new", evolutionInstance)
+            return@withContext Result.failure(IllegalStateException("QR após pairing"))
         }
 
-        report(requestId, "submit_pairing_code", "running", "Salvando nome do dispositivo…", evolutionInstance)
-        if (!runNameDeviceLoop(requestId, evolutionInstance)) {
-            failPairing(requestId, "Timeout ao nomear dispositivo vinculado", evolutionInstance)
-            return@withContext Result.failure(IllegalStateException("Timeout ao nomear dispositivo"))
+        if (WhatsappRegistrationAccessibilityService.isPairingFlowComplete() ||
+            WhatsappLinkDeviceState.step == WhatsappLinkDeviceState.Step.Done
+        ) {
+            val msg = "Dispositivo vinculado (sem tela de nome)"
+            report(requestId, "submit_pairing_code", "completed", msg, evolutionInstance)
+            preferences.setLastStatus(msg)
+            WhatsappRegistrationState.reset()
+            WhatsappLinkDeviceState.reset()
+            return@withContext Result.success(msg)
         }
 
-        val deviceName = WhatsappLinkDeviceState.deviceName ?: WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME
-        val msg = "Dispositivo vinculado como $deviceName"
-        report(requestId, "submit_pairing_code", "completed", msg, evolutionInstance)
-        preferences.setLastStatus(msg)
-        WhatsappRegistrationState.reset()
-        WhatsappLinkDeviceState.reset()
-        Result.success(msg)
+        // Nome também é opcional: só se a tela aparecer.
+        if (WhatsappRegistrationAccessibilityService.isOnNameDeviceScreen()) {
+            WhatsappLinkDeviceState.beginNameDevice(WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME)
+            report(requestId, "submit_pairing_code", "running", "Salvando nome do dispositivo…", evolutionInstance)
+            if (!runNameDeviceLoop(requestId, evolutionInstance)) {
+                if (WhatsappRegistrationAccessibilityService.isPairingFlowComplete()) {
+                    val msg = "Vinculado (nome não confirmado, mas fluxo concluiu)"
+                    report(requestId, "submit_pairing_code", "completed", msg, evolutionInstance)
+                    preferences.setLastStatus(msg)
+                    WhatsappRegistrationState.reset()
+                    WhatsappLinkDeviceState.reset()
+                    return@withContext Result.success(msg)
+                }
+                failPairing(requestId, "Timeout ao nomear dispositivo vinculado", evolutionInstance)
+                return@withContext Result.failure(IllegalStateException("Timeout ao nomear dispositivo"))
+            }
+            val deviceName = WhatsappLinkDeviceState.deviceName ?: WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME
+            val msg = "Dispositivo vinculado como $deviceName"
+            report(requestId, "submit_pairing_code", "completed", msg, evolutionInstance)
+            preferences.setLastStatus(msg)
+            WhatsappRegistrationState.reset()
+            WhatsappLinkDeviceState.reset()
+            return@withContext Result.success(msg)
+        }
+
+        // Espera curta: às vezes o WA demora a mostrar nome ou chats.
+        val settled = withTimeoutOrNull(12_000L) {
+            while (true) {
+                syncStepFromScreen()
+                when {
+                    WhatsappRegistrationAccessibilityService.isOnQrLinkScreen() -> return@withTimeoutOrNull "qr"
+                    WhatsappRegistrationAccessibilityService.isOnNameDeviceScreen() -> return@withTimeoutOrNull "name"
+                    WhatsappRegistrationAccessibilityService.isOnScamWarningScreen() -> return@withTimeoutOrNull "scam"
+                    WhatsappRegistrationAccessibilityService.isPairingFlowComplete() ||
+                        WhatsappLinkDeviceState.step == WhatsappLinkDeviceState.Step.Done ->
+                        return@withTimeoutOrNull "done"
+                }
+                delay(500)
+            }
+            @Suppress("UNREACHABLE_CODE")
+            "timeout"
+        } ?: "timeout"
+
+        when (settled) {
+            "done" -> {
+                val msg = "Dispositivo vinculado"
+                report(requestId, "submit_pairing_code", "completed", msg, evolutionInstance)
+                preferences.setLastStatus(msg)
+                WhatsappRegistrationState.reset()
+                WhatsappLinkDeviceState.reset()
+                Result.success(msg)
+            }
+            "name" -> {
+                WhatsappLinkDeviceState.beginNameDevice(WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME)
+                report(requestId, "submit_pairing_code", "running", "Salvando nome do dispositivo…", evolutionInstance)
+                if (!runNameDeviceLoop(requestId, evolutionInstance)) {
+                    failPairing(requestId, "Timeout ao nomear dispositivo vinculado", evolutionInstance)
+                    return@withContext Result.failure(IllegalStateException("Timeout ao nomear dispositivo"))
+                }
+                val deviceName = WhatsappLinkDeviceState.deviceName ?: WhatsappLinkDeviceState.DEFAULT_DEVICE_NAME
+                val msg = "Dispositivo vinculado como $deviceName"
+                report(requestId, "submit_pairing_code", "completed", msg, evolutionInstance)
+                preferences.setLastStatus(msg)
+                WhatsappRegistrationState.reset()
+                WhatsappLinkDeviceState.reset()
+                Result.success(msg)
+            }
+            "scam" -> {
+                failPairing(requestId, "Ainda na tela anti-golpe — toque Conectar e rode de novo", evolutionInstance)
+                Result.failure(IllegalStateException("Ainda anti-golpe"))
+            }
+            "qr" -> {
+                failPairing(requestId, "Voltou ao QR — force_new com Vincular por número", evolutionInstance)
+                Result.failure(IllegalStateException("QR"))
+            }
+            else -> {
+                failPairing(
+                    requestId,
+                    "Após o código: nem nome, nem chats, nem anti-golpe — verifique a tela",
+                    evolutionInstance,
+                )
+                Result.failure(IllegalStateException("Tela pós-código desconhecida"))
+            }
+        }
     }
 
     /** Tela "suspeita de golpe" → Conectar dispositivo → nome → salvar. */
@@ -518,17 +631,27 @@ class WhatsappLinkDeviceCoordinator(private val context: Context) {
                         )
                         return@withTimeoutOrNull true
                     }
+                    WhatsappRegistrationAccessibilityService.isPairingFlowComplete() -> {
+                        WhatsappLinkDeviceState.markDone()
+                        return@withTimeoutOrNull true
+                    }
+                    WhatsappRegistrationAccessibilityService.isOnQrLinkScreen() ->
+                        return@withTimeoutOrNull false
                     WhatsappLinkDeviceState.step == WhatsappLinkDeviceState.Step.Failed ->
                         return@withTimeoutOrNull false
                     else -> {
                         val now = System.currentTimeMillis()
                         if (now - lastHeartbeat >= HEARTBEAT_MS) {
                             lastHeartbeat = now
+                            val screen = when {
+                                WhatsappRegistrationAccessibilityService.isOnScamWarningScreen() -> "anti-golpe"
+                                else -> "aguardando (anti-golpe opcional)"
+                            }
                             report(
                                 requestId,
                                 command,
                                 "running",
-                                "Confirmando anti-golpe…",
+                                "Confirmando anti-golpe… ($screen)",
                                 evolutionInstance,
                             )
                         }
@@ -560,6 +683,8 @@ class WhatsappLinkDeviceCoordinator(private val context: Context) {
                         WhatsappLinkDeviceState.markDone()
                         return@withTimeoutOrNull true
                     }
+                    WhatsappRegistrationAccessibilityService.isOnQrLinkScreen() ->
+                        return@withTimeoutOrNull false
                     WhatsappLinkDeviceState.step == WhatsappLinkDeviceState.Step.Failed ->
                         return@withTimeoutOrNull false
                     else -> {

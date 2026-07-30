@@ -8,20 +8,57 @@ import com.folderbackup.agent.backup.WhatsappSessionExporter
 import com.folderbackup.agent.data.AppPreferences
 import kotlinx.coroutines.delay
 
-/** Abre WhatsApp Business (root no MIUI) e tela "Insira o código". */
+/** Abre WhatsApp Business (intent / a11y / root / ícone no launcher). */
 object WhatsappOpenHelper {
     private const val WA_HOME = "${WhatsappSessionExporter.WHATSAPP_PACKAGE}/com.whatsapp.home.ui.HomeActivity"
     private const val WA_ENTER_CODE =
         "${WhatsappSessionExporter.WHATSAPP_PACKAGE}/com.whatsapp.companiondevice.LinkedDevicesEnterCodeActivity"
 
     suspend fun open(context: Context): OpenResult {
-        if (launchComponent(context, WA_HOME) || launchViaIntent(context)) {
-            Log.i(TAG, "WhatsApp Home aberto")
+        // Intent direto primeiro (sem root). Em background pode falhar no Android 10+.
+        if (launchViaIntent(context)) {
+            Log.i(TAG, "WhatsApp aberto via intent")
+            delay(1500)
+            return OpenResult(method = "intent")
+        }
+        // AccessibilityService pode startActivity mesmo com app em 2º plano.
+        if (launchViaAccessibilityService()) {
+            Log.i(TAG, "WhatsApp aberto via AccessibilityService")
+            delay(1500)
+            return OpenResult(method = "a11y_intent")
+        }
+        if (launchComponent(context, WA_HOME)) {
+            Log.i(TAG, "WhatsApp Home aberto via root")
             delay(1500)
             return OpenResult(method = "home")
         }
-        Log.e(TAG, "Falha ao abrir WhatsApp — ative Root no app / Magisk")
+        // Último recurso: HOME + clicar ícone no launcher (Motorola / ES / PT).
+        if (com.folderbackup.agent.registration.WhatsappRegistrationAccessibilityService
+                .openWhatsappFromLauncher()
+        ) {
+            Log.i(TAG, "WhatsApp aberto via ícone no launcher")
+            delay(1500)
+            return OpenResult(method = "launcher_icon")
+        }
+        Log.e(TAG, "Falha ao abrir WhatsApp (intent/a11y/root/launcher)")
         return OpenResult(method = "failed", ok = false)
+    }
+
+    private fun launchViaAccessibilityService(): Boolean {
+        val service =
+            com.folderbackup.agent.registration.WhatsappRegistrationAccessibilityService.instance
+                ?: return false
+        val intent = service.packageManager
+            .getLaunchIntentForPackage(WhatsappSessionExporter.WHATSAPP_PACKAGE)
+            ?: return false
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        return try {
+            service.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "a11y startActivity WA: ${e.message}")
+            false
+        }
     }
 
     /** Abre direto a tela "Insira o código" (LinkedDevicesEnterCodeActivity). */
